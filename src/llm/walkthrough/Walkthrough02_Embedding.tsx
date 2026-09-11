@@ -21,9 +21,9 @@ export function walkthrough02_Embedding(args: IWalkthroughArgs) {
     wt.dimHighlightBlocks = [layout.idxObj, layout.tokEmbedObj, layout.posEmbedObj, layout.residual0];
 
     commentary(wt)`
-    我們之前看到如何使用一個簡單的查詢表將標記(token)映射為一串整數。這些整數，即標記索引(${c_blockRef('_token indices_', state.layout.idxObj, DimStyle.TokenIdx)})，是我們在模型中第一次也是唯一一次看到的整數。從這裡開始，我們將使用浮點數（十進位制數）。
+    我們之前看到如何使用一個簡單的查詢表將 token 映射為一串整數。這些整數，即 token 索引(${c_blockRef('_token indices_', state.layout.idxObj, DimStyle.TokenIdx)})，是我們在模型中第一次也是唯一一次看到的整數。從這裡開始，我們將使用浮點數（十進位制數）。
 
-    讓我們來看看第4個標記（token, 索引3）是如何用於生成輸入嵌入（${c_blockRef('_input embedding_', state.layout.residual0)}）的第4列向量的。`;
+    讓我們來看看第4個 token（索引 3）是如何用於生成輸入嵌入（${c_blockRef('_input embedding_', state.layout.residual0)}）的第4列向量的。`;
     breakAfter();
 
     let t_moveCamera = afterTime(null, 1.0);
@@ -32,9 +32,9 @@ export function walkthrough02_Embedding(args: IWalkthroughArgs) {
     breakAfter();
 
     commentary(wt)`
-    我們使用標記索引（本例中為 ${c_str('B', DimStyle.Token)} = ${c_dimRef('1', DimStyle.TokenIdx)}）來選擇左邊${c_blockRef('_標記嵌入矩陣(token embedding matrix)_', state.layout.tokEmbedObj)}的第2列。請注意，我們在這裡使用的是基於 0 的索引，因此第一列的索引為 0。
+    我們使用 token 索引（本例中為 ${c_str('B', DimStyle.Token)} = ${c_dimRef('1', DimStyle.TokenIdx)}）來選擇左邊${c_blockRef('_token 嵌入矩陣(token embedding matrix)_', state.layout.tokEmbedObj)}的第2列。請注意，我們在這裡使用的是基於 0 的索引，因此第一列的索引為 0。
 
-    這樣就產生了一個大小為 ${c_dimRef('_C_ = 48', DimStyle.C)} 的列向量，我們將其描述為標記嵌入(token embedding)。`;
+    這樣就產生了一個大小為 ${c_dimRef('_C_ = 48', DimStyle.C)} 的列向量，我們將其描述為 token 嵌入(token embedding)。`;
     breakAfter();
 
     let t1_fadeEmbedAnim = afterTime(null, 0.3);
@@ -43,7 +43,7 @@ export function walkthrough02_Embedding(args: IWalkthroughArgs) {
     breakAfter();
 
     commentary(wt)`
-    由於我們要檢視的是第 4 個位置（t = 3）上的標記 ${c_str('B', DimStyle.Token)}，因此我們將取${c_blockRef('_位置嵌入矩陣(position embedding matrix)_', state.layout.posEmbedObj)}的第 4 列。
+    由於我們要檢視的是第 4 個位置（t = 3）上的 token ${c_str('B', DimStyle.Token)}，因此我們將取${c_blockRef('_位置嵌入矩陣(position embedding matrix)_', state.layout.posEmbedObj)}的第 4 列。
 
     這也會產生一個大小為 ${c_dimRef('_C_ = 48', DimStyle.C)} 的列向量，我們將其描述為位置嵌入。`;
     breakAfter();
@@ -53,7 +53,7 @@ export function walkthrough02_Embedding(args: IWalkthroughArgs) {
     breakAfter();
 
     commentary(wt)`
-    請注意，這些位置嵌入和標記嵌入都是在訓練過程中學習的（用藍色表示）。
+    請注意，這些位置嵌入和 token 嵌入都是在訓練過程中學習的（用藍色表示）。
 
     現在我們有了這兩個列向量，只需將它們相加，就能產生另一個大小為 ${c_dimRef('_C_ = 48', DimStyle.C)} 的列向量。`;
     breakAfter();
@@ -69,7 +69,7 @@ export function walkthrough02_Embedding(args: IWalkthroughArgs) {
     breakAfter();
 
     commentary(wt)`
-    現在，我們對輸入序列中的所有標記執行同樣的過程，建立一組包含標記值及其位置的向量。
+    現在，我們對輸入序列中的所有 token 執行同樣的過程，建立一組包含 token 值及其位置的向量。
 `;
 
     breakAfter();
@@ -81,7 +81,7 @@ export function walkthrough02_Embedding(args: IWalkthroughArgs) {
     commentary(wt)`
     請隨意將滑鼠懸停在${c_blockRef('_輸入嵌入（input embedding）_', state.layout.residual0)}矩陣的各個單元格上，檢視計算過程及其來源。
 
-    我們可以看到，對輸入序列中的所有標記執行這一過程會產生一個大小為 ${c_dimRef('_T_', DimStyle.T)} x ${c_dimRef('_C_', DimStyle.C)} 的矩陣。${c_dimRef('_T_', DimStyle.T)} 代表${c_dimRef('_時間_', DimStyle.T)}，也就是說，你可以把序列中稍後的標記看作是時間上稍後的標記。${c_dimRef('_C_', DimStyle.C)} 代表${c_dimRef('_通道_', DimStyle.C)}，但也被稱為 "特徵"、"維度 "或 "嵌入大小"。這個長度 ${c_dimRef('_C_', DimStyle.C)} 是模型的幾個 "超參數 "之一，由設計者在模型大小和效能之間權衡選擇。
+    我們可以看到，對輸入序列中的所有 token 執行這一過程會產生一個大小為 ${c_dimRef('_T_', DimStyle.T)} x ${c_dimRef('_C_', DimStyle.C)} 的矩陣。${c_dimRef('_T_', DimStyle.T)} 代表${c_dimRef('_時間_', DimStyle.T)}，也就是說，你可以把序列中稍後的 token 看作是時間上稍後的 token。${c_dimRef('_C_', DimStyle.C)} 代表${c_dimRef('_通道_', DimStyle.C)}，但也被稱為 "特徵"、"維度 "或 "嵌入大小"。這個長度 ${c_dimRef('_C_', DimStyle.C)} 是模型的幾個 "超參數 "之一，由設計者在模型大小和效能之間權衡選擇。
 
     這個矩陣，我們稱之為${c_blockRef('_輸入嵌入（input embedding）_', state.layout.residual0)}，現在可以透過模型向下傳遞了。在本指南中，我們將非常熟悉由長度為 ${c_dimRef('C', DimStyle.C)}  的 ${c_dimRef('T', DimStyle.T)}  列組成的矩陣集合。
     `;

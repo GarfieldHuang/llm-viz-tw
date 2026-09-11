@@ -94,11 +94,11 @@ export function walkthroughIntro(args: IWalkthroughArgs) {
     breakAfter();
 
     let tokenStr = c_str('_token_', 0, DimStyle.Token);
-    let tokenIdxStr = c_str('_標記索引_', 0, DimStyle.TokenIdx);
+    let tokenIdxStr = c_str('_token 索引_', 0, DimStyle.TokenIdx);
 
-    commentary(wt, t6)`我們稱這些字母為 "標記"（${tokenStr}），模型的不同標記集合構成了它的_詞彙表_：${embed(TokenVocab)}
+    commentary(wt, t6)`我們稱這些字母為 "token"（${tokenStr}），模型的不同 token 集合構成了它的_詞彙表_：${embed(TokenVocab)}
 
-    在這個表格中，每個標記都有一個編號，即${tokenIdxStr}。現在，我們可以將這一串數字輸入模型：${embed(ExampleTokenValues)}\n`;
+    在這個表格中，每個 token 都有一個編號，即${tokenIdxStr}。現在，我們可以將這一串數字輸入模型：${embed(ExampleTokenValues)}\n`;
     breakAfter();
 
     let t7 = afterTime(null, 1.5, 0.5);
@@ -220,7 +220,7 @@ export function walkthroughIntro(args: IWalkthroughArgs) {
         }
     }
 
-    commentary(wt)`那麼輸出是什麼呢？對序列中下一個標記(token)的預測。因此，在第6個條目中，我們可以得到下一個標記將是 "A"、"B "或 "C "的機率。`
+    commentary(wt)`那麼輸出是什麼呢？對序列中下一個 token 的預測。因此，在第6個條目中，我們可以得到下一個 token 將是 "A"、"B "或 "C "的機率。`
 
     commentary(wt)`在這種情況下，模型非常確定會是 "A"。現在，我們可以將這一預測反饋到模型的頂層，並重復整個過程。`;
 
