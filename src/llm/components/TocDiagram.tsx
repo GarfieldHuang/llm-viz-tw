@@ -128,11 +128,11 @@ export const TocDiagram: React.FC<{
         entryGroups[entryGroups.length - 1].entries.push(entry);
     }
 
-    entryGroups.push({ groupName: 'Intro', entries: [] });
-    makeEntry(Phase.Intro_Intro, 'Introduction', []);
-    makeEntry(Phase.Intro_Prelim, 'Preliminaries', []);
+    entryGroups.push({ groupName: '簡介', entries: [] });
+    makeEntry(Phase.Intro_Intro, '概述', []);
+    makeEntry(Phase.Intro_Prelim, '預備知識', []);
 
-    entryGroups.push({ groupName: 'Components', entries: [] });
+    entryGroups.push({ groupName: '組成元件', entries: [] });
     makeEntry(Phase.Input_Detail_Embedding, 'Embedding', ['tokEmbed', 'posEmbed'], true);
     makeEntry(Phase.Input_Detail_LayerNorm, 'Layer Norm', ['ln1', 'ln2', 'lnf']);
     makeEntry(Phase.Input_Detail_SelfAttention, 'Self Attention', ['selfAttend']);
@@ -560,7 +560,7 @@ export const TocDiagram: React.FC<{
     let titleAbove = false;
 
     return <div>
-        {titleAbove && <div className={s.tocTitle}>Table of Contents</div>}
+        {titleAbove && <div className={s.tocTitle}>目錄</div>}
         <div className={s.tocDiagram}>
             <svg viewBox={`0 0 310 ${height}`} width={'310px'} height={height} ref={setDiagramEl}>
                 {exampleInfo?.node}
@@ -571,7 +571,7 @@ export const TocDiagram: React.FC<{
                 {renderTocToDigramLines()}
             </svg>
             <div className={s.toc}>
-                {!titleAbove && <div className={s.tocTitle}>Table of Contents</div>}
+                {!titleAbove && <div className={s.tocTitle}>目錄</div>}
                 {entryGroups.map((group, i) => {
 
                     return <React.Fragment key={i}>

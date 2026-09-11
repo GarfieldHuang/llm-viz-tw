@@ -85,14 +85,14 @@ export function initWalkthrough() {
         phaseTransitiveData: null as any,
         phaseList: [{
             groupId: PhaseGroup.Intro,
-            title: 'Introduction',
+            title: '簡介',
             phases: [
                 { id: Phase.Intro_Intro, title: '概述' },
                 { id: Phase.Intro_Prelim, title: '準備工作' },
             ],
         }, {
             groupId: PhaseGroup.Detailed_Input,
-            title: 'Detailed',
+            title: '詳解',
             phases: [
                 { id: Phase.Input_Detail_Embedding, title: '嵌入(Embedding)' },
                 { id: Phase.Input_Detail_LayerNorm, title: '層歸一化(Layer Norm)' },
