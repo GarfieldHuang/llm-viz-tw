@@ -1,25 +1,64 @@
+# LLM 視覺化（繁體中文版）
 
-# LLM 視覺化演示（中文版）
+GPT 類大語言模型的 **3D 互動視覺化**：一個 token 從進入模型到吐出機率分佈，
+每一步矩陣運算都看得到，並附逐步導覽解說。
 
-這是一個由 [Brendan Bycroft](https://bbycroft.net/) 開發製作非常意義的 [llm-viz](https://github.com/bbycroft/llm-viz) 專案的中文翻譯版本，對學習瞭解LLM非常有幫忙，也可用於教學演示。
+原作 [llm-viz](https://github.com/bbycroft/llm-viz) by [Brendan Bycroft](https://bbycroft.net/)（MIT）
+→ 簡體翻譯 [llm-viz-cn](https://github.com/czhixin/llm-viz-cn) by AI探索官
+→ **本版：繁體化 + 台灣術語校正 + GitHub Pages 靜態部署**
 
-## 專案介紹
+## 專案內容
 
-這個專案展示的是一個GPT風格網路的工作實現的3D模型，也就是在OpenAI的GPT-2、GPT-3，甚至可能是GPT-4中使用的網路拓撲。
+展示的是一個可運作的 GPT 風格網路，也就是 OpenAI 在 GPT-2、GPT-3 中使用的網路拓撲。
 
-首先展示的帶有工作權重的網路是一個微型網路，它能夠對字母A、B和C的小的列表進行排序。這是來自Andrej Karpathy的 [minGPT](https://github.com/karpathy/minGPT) 實現的演示示例模型。
+預設載入的是一個帶有真實權重的極小模型（nano-gpt，85,000 個參數），
+任務是把 A、B、C 三個字母的短列表排序 —— 出自 Andrej Karpathy 的
+[minGPT](https://github.com/karpathy/minGPT) 範例模型。
 
-渲染器還支援視覺化任意大小的網路，並且能夠處理較小的 gpt2 大小，儘管權重並未下載（這需要100多MB的空間）。
+渲染器本身支援任意大小的網路，也能處理 GPT-2 規模，但那份權重未內含（需要 100MB 以上）。
 
-## 快速執行
+## 導覽章節
 
-1. 安裝依賴: `yarn`
-2. 本地執行除錯: `yarn dev`
+| # | 章節 | # | 章節 |
+|---|---|---|---|
+| 00 | 簡介 | 05 | Softmax |
+| 01 | 預備知識 | 06 | 投影 (Projection) |
+| 02 | 嵌入 (Embedding) | 07 | MLP |
+| 03 | 層歸一化 (LayerNorm) | 08 | Transformer |
+| 04 | 自注意力 (Self-Attention) | 09 | 輸出 |
 
-## 關於翻譯者
+## 本地執行
 
-這是由 `AI探索官` 完成翻譯，有不完善的地方或者翻譯錯誤的地方歡迎指出，同時歡迎關注同名公眾號 `AI探索官`
+```
+yarn install
+yarn dev
+```
 
-一起探索更多的AI知識 [https://www.iiiai.com](https://www.iiiai.com)
+開 <http://localhost:3002>
 
-[![Powered by DartNode](https://dartnode.com/branding/DN-Open-Source-sm.png)](https://dartnode.com "Powered by DartNode - Free VPS for Open Source")
+## 部署到 GitHub Pages
+
+推上 `main` 後由 `.github/workflows/deploy.yml` 自動建置並發布。
+Repo 需在 **Settings → Pages → Source** 選 **GitHub Actions**。
+
+`basePath` 由 workflow 依 repo 名稱自動注入，不必手動改設定。
+
+## 與上游的差異
+
+- 全站介面與導覽解說繁體化（`s2twp` 轉換 + 人工術語校正）
+- 修正 OpenCC 在技術文件上的誤轉：`引數→參數`、`關注力→注意力`、`對映→映射`、`擴充套件→擴展`
+- 改為 Next.js 靜態匯出（`output: 'export'`），可部署於純靜態主機
+- 資產路徑改走 `src/utils/assetPath.ts`，支援掛在子路徑下
+- 內含 `public/native.wasm`（上游為 build 產物，未進 repo）
+- 移除上游附帶的 RISC-V CPU 模擬與流體模擬子專案（與 LLM 無關，且含靜態匯出不支援的 API route）
+
+## 已知限制
+
+3D 畫面內的標籤（`LayerNorm`、`Q/K/V`、`μ`、`σ` 等）維持英文。
+那些字是用 MSDF 字型圖集畫在 WebGL canvas 上的，圖集僅 512×256 且不含任何中日韓字形；
+要支援中文需重製多頁圖集，體積會膨脹數 MB。
+實務上這些是不該翻譯的技術術語，維持原文反而較佳。
+
+## 授權
+
+MIT，沿用上游 [bbycroft/llm-viz](https://github.com/bbycroft/llm-viz)。

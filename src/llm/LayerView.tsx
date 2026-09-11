@@ -20,9 +20,10 @@ import { WelcomePopup } from './WelcomePopup';
 import { KeyboardManagerContext, KeyboardOrder, useGlobalKeyboard } from '@/src/utils/keyboard';
 import { Resizer } from '../utils/Resizer';
 import { ModelSelectorToolbar } from './components/ModelSelectorToolbar';
+import { assetPath } from '@/src/utils/assetPath';
 
 async function fetchTensorData(url: string): Promise<ITensorSet> {
-    let resp = await fetch(url);
+    let resp = await fetch(assetPath(url));
     let data = await resp.json();
     for (let k in data) {
         if (data[k].shape) {

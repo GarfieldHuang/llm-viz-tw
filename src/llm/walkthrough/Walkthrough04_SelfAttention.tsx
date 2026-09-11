@@ -162,7 +162,7 @@ ${embedInline((() => {
 
     僅使用查詢與過去的鍵(keys)進行比較的想法使得這成為因果自注意力（self-attention）。也就是說，標記（tokens）無法 "預見未來"。
 
-    另一個要素是，在我們取點積之後，我們將其除以sqrt(${c_dimRef('A', DimStyle.A)})其中${c_dimRef('A', DimStyle.A)}是Q/K/V向量的長度。這種縮放是為了防止大值在下一步的歸一化（softmax）中占主導地位。
+    另一個要素是，在我們取點積之後，我們將其除以sqrt(${c_dimRef('A', DimStyle.A)})其中${c_dimRef('A', DimStyle.A)}是Q/K/V向量的長度。這種縮放是為了防止大值在下一步的歸一化（softmax）中佔主導地位。
 
     我們將跳過softmax操作（稍後描述），只需說明每一行的歸一化總和為 1 即可。
 `;

@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # project site 掛在 /<repo>/ 底下，注入 basePath 給 next.config.js 與 assetPath()
+      - name: Resolve base path
+        run: echo "NEXT_PUBLIC_BASE_PATH=/${GITHUB_REPOSITORY#*/}" >> "$GITHUB_ENV"
+
+      - name: Build static site
+        run: yarn build
+
+      - name: Verify export
+        run: |
+          test -f out/index.html || { echo "out/index.html 不存在，靜態匯出失敗"; exit 1; }
+          test -f out/native.wasm || { echo "native.wasm 未被複製"; exit 1; }
+          test -f out/fonts/font-atlas.png || { echo "字型圖集未被複製"; exit 1; }
+          touch out/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
