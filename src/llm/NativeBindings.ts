@@ -15,6 +15,15 @@ export async function loadNativeBindings() {
             memory,
         },
         odin_env: {
+            // Odin runtime 的亂數來源。native.wasm 會 import 它，
+            // 少了這個 WebAssembly.instantiate 會丟 LinkError。
+            rand_bytes: (ptr: number, len: number) => {
+                let mem = new Uint8Array(importObject.env.memory.buffer, ptr, len);
+                // getRandomValues 單次上限 65536 bytes，超過要分段填。
+                for (let off = 0; off < mem.length; off += 65536) {
+                    crypto.getRandomValues(mem.subarray(off, Math.min(off + 65536, mem.length)));
+                }
+            },
             write: (fd: number, ptr: number, len: number) => {
                 let mem = new Uint8Array(importObject.env.memory.buffer, ptr, len);
                 let strPart = new TextDecoder().decode(mem);
