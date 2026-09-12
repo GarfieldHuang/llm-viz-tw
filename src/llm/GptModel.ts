@@ -29,6 +29,8 @@ export interface IDataAndModel {
     data: ITensorSet;
     model: ITensorSet;
     native: NativeFunctions;
+    /** 反向傳播用的預算梯度。載入失敗時為 null，前向完全不受影響。 */
+    grads: ITensorSet | null;
 }
 
 export type IModelState = ReturnType<typeof initModel>;

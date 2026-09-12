@@ -75,18 +75,12 @@ def main():
 
     n_head, n_embd = mc.n_head, mc.n_embd
     T = mc.block_size
-    B = 3
+    # 視覺化端固定以 B=1 執行（Program.ts 的 shape.B 與 LayerView 的 initModel 都是 1），
+    # 梯度張量必須同樣是 B=1，否則寫進 texture 時尺寸對不上。
+    B = 1
 
-    # 與 gen_test_data.py 完全相同的輸入
-    torch.random.manual_seed(34)
+    # 與 gen_test_data.py 的第一列輸入完全相同 —— 也就是畫面上顯示的那條序列
     idx = torch.tensor([[0, 0, 2, 1, 0, 1, 0, 0, 0, 0, 0]], dtype=torch.long)
-    extraIdx = torch.cat([
-        torch.randint(0, 3, (B - 1, 6), dtype=torch.long),
-        torch.zeros((B - 1, 5), dtype=torch.long),
-    ], dim=1)
-    if B > 1:
-        extraIdx[1, 0] = 1
-    idx = torch.cat([idx, extraIdx], dim=0)
 
     # ---- 前向（逐層捕捉，並 retain_grad 以便取得中間量的梯度）----
     captured = {}

@@ -21,6 +21,7 @@ import { KeyboardManagerContext, KeyboardOrder, useGlobalKeyboard } from '@/src/
 import { Resizer } from '../utils/Resizer';
 import { ModelSelectorToolbar } from './components/ModelSelectorToolbar';
 import { assetPath } from '@/src/utils/assetPath';
+import { createGradData } from "./Backprop";
 
 async function fetchTensorData(url: string): Promise<ITensorSet> {
     let resp = await fetch(assetPath(url));
@@ -132,9 +133,15 @@ export function LayerView() {
             let dataP = fetchTensorData('gpt-nano-sort-t0-partials.json');
             let modelP = fetchTensorData('gpt-nano-sort-model.json');
             let nativeBindingsP = loadNativeBindings();
+            // 反向傳播的梯度：刻意不放進 Promise.all，載入失敗時前向照常運作。
+            let gradsP = fetchTensorData('gpt-nano-sort-grads.json').catch(err => {
+                console.warn('[backprop] 梯度資料載入失敗，反向章節將無法顯示數值', err);
+                return null;
+            });
             let [data, model, native] = await Promise.all([dataP, modelP, nativeBindingsP]);
+            let grads = await gradsP;
             if (stale) return;
-            setDataAndModel({ data, model, native });
+            setDataAndModel({ data, model, native, grads });
         }
 
         getData();
@@ -258,6 +265,20 @@ class CanvasRender {
             this.progState.native = data.dataAndModel.native;
             this.progState.wasmGptModel = constructModel(data.dataAndModel.model, data.dataAndModel.model.config, data.dataAndModel.native);
             this.progState.jsGptModel = createGpuModelForWasm(this.renderState.gl, data.dataAndModel.model.config);
+
+            // 反向傳播：把預算好的梯度張量做成與前向同尺寸的貼圖。
+            // 失敗只影響反向章節，前向照常。
+            if (data.dataAndModel.grads && this.progState.jsGptModel) {
+                try {
+                    this.progState.gradData = createGradData(
+                        this.renderState.gl,
+                        this.progState.jsGptModel,
+                        data.dataAndModel.grads,
+                    );
+                } catch (err) {
+                    console.warn('[backprop] 建立梯度貼圖失敗', err);
+                }
+            }
             // initWebGpu();
             // setModelInputData(this.renderState, this.progState.gptGpuModel, this.random);
             // runModel(this.renderState, this.progState.gptGpuModel);

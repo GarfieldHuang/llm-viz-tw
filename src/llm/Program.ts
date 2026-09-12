@@ -4,6 +4,7 @@ import { drawBlockLabels } from "./components/SectionLabels";
 import { drawModelCard } from "./components/ModelCard";
 import { IGptModelLink, IGpuGptModel, IModelShape } from "./GptModel";
 import { genGptModelLayout, IBlkDef, IGptModelLayout } from "./GptModelLayout";
+import { applyGradView, IGradData } from "./Backprop";
 import { drawText, IFontAtlasData, IFontOpts, measureText } from "./render/fontRender";
 import { initRender, IRenderState, IRenderView, renderModel, resetRenderBuffers } from "./render/modelRender";
 import { beginQueryAndGetPrevMs, endQuery } from "./render/queryManager";
@@ -41,6 +42,10 @@ export interface IProgramState {
     shape: IModelShape;
     gptGpuModel: IGpuGptModel | null;
     jsGptModel: IGptModelLink | null;
+    /** 反向傳播的梯度貼圖組；未載入時為 null。 */
+    gradData: IGradData | null;
+    /** 是否以梯度取代啟用值顯示（由反向章節開啟，每幀重置）。 */
+    showGrads: boolean;
     movement: IMovementInfo;
     display: IDisplayState;
     pageLayout: ILayout;
@@ -152,6 +157,8 @@ export function initProgramState(canvasEl: HTMLCanvasElement, fontAtlasData: IFo
         camera,
         shape: shape,
         layout: genGptModelLayout(shape),
+        gradData: null,
+        showGrads: false,
         currExampleId: -1,
         mainExample: {
             name: 'nano-gpt',
@@ -245,6 +252,12 @@ export function runProgram(view: IRenderView, state: IProgramState) {
 
     // generate the base model, incorporating the gpu-side model if available
     state.layout = genGptModelLayout(state.shape, state.jsGptModel);
+
+    // 反向章節：把 block 的取值來源換成梯度貼圖。
+    // layout 每幀重建，所以這個換置是暫時的，前向章節不會被影響。
+    if (state.showGrads) {
+        applyGradView(state.layout, state.gradData);
+    }
 
     // @TODO: handle different models in the same scene.
     // Maybe need to copy a lot of different things like the entire render state per model?
