@@ -108,10 +108,21 @@ export function getConsumerMap(layout: IGptModelLayout): Map<IBlkDef, IBlkConsum
     return map;
 }
 
-/** 真正有梯度路徑的消費者（濾掉聚合樁與完全透明的區塊）。 */
+/**
+ * 真正有梯度路徑的消費者。
+ *
+ * 兩種要濾掉：
+ *  1. 聚合樁 —— 它們被併進 LayerNorm / softmax 的反向式裡，不是獨立路徑。
+ *  2. **本身沒有梯度資料的消費者** —— 沒有梯度的人，不可能交給你梯度。
+ *
+ * 第二條看似瑣碎，但它決定了 Logits 的浮層對不對：Logits 的前向消費者是
+ * 最後那個 softmax，可是損失是直接對 logits 定義的（cross_entropy(logits, target)），
+ * 梯度從來沒有流經畫面上那塊 softmax，它也就沒有梯度貼圖。
+ * 少了這條，Logits 會被當成「softmax 的反向」，畫出一個引用了不存在的 dP 的式子。
+ */
 export function getRealConsumers(state: IProgramState, blk: IBlkDef): IBlkConsumer[] {
     let all = getConsumerMap(state.layout).get(blk) ?? [];
-    return all.filter(c => !isAggStub(c.consumer));
+    return all.filter(c => !isAggStub(c.consumer) && !c.consumer.gradMissing);
 }
 
 /**
@@ -187,8 +198,12 @@ export function drawDataFlowBackward(args: IDataFlowArgs): BoundingBox3d {
     let consumers = getRealConsumers(state, blk);
 
     if (consumers.length === 0) {
-        // 圖的末端：logits softmax。梯度是從損失直接種下來的。
-        return drawLossSeed(args);
+        // 反向圖的起點：梯度不是從下游算來的，是損失直接種下去的。
+        if (blk === state.layout.logits) {
+            return drawLossSeed(args);
+        }
+        // 其他沒有下游的區塊：說不出所以然就別亂講
+        return note(args, 'no downstream gradient path');
     }
 
     if (consumers.length > 1) {
