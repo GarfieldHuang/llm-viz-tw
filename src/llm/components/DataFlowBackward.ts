@@ -24,9 +24,10 @@ import {
 import { gradColor, gradName, shortName } from "./GradNames";
 import { ITextBlockArgs, TextBlockType, mkTextBlock } from "./TextLayout";
 import { splitGridForHighlight, splitGrid, findSubBlocks, dimProps } from "../Annotations";
+import { getDepSrcIdx } from "../Interaction";
 import { IFontOpts } from "../render/fontRender";
 import { addLine2, drawLineSegs, makeLineOpts } from "../render/lineRender";
-import { Colors } from "../walkthrough/WalkthroughTools";
+import { Colors, DimStyle, dimStyleTextShort } from "../walkthrough/WalkthroughTools";
 import { isNotNil } from "@/src/utils/data";
 import { BoundingBox3d, Dim, Vec3, Vec4 } from "@/src/utils/vector";
 
@@ -121,8 +122,18 @@ export function getConsumerMap(layout: IGptModelLayout): Map<IBlkDef, IBlkConsum
  * 少了這條，Logits 會被當成「softmax 的反向」，畫出一個引用了不存在的 dP 的式子。
  */
 export function getRealConsumers(state: IProgramState, blk: IBlkDef): IBlkConsumer[] {
+    return getGraphConsumers(state, blk).filter(c => !c.consumer.gradMissing);
+}
+
+/**
+ * 圖上的消費者（只濾掉聚合樁，不管有沒有梯度資料）。
+ *
+ * 拿來區分兩種「沒有下游」：真的是圖的末端，還是下游存在、只是它的梯度
+ * 沒有被記錄下來。兩者要給使用者不同的說法。
+ */
+export function getGraphConsumers(state: IProgramState, blk: IBlkDef): IBlkConsumer[] {
     let all = getConsumerMap(state.layout).get(blk) ?? [];
-    return all.filter(c => !isAggStub(c.consumer) && !c.consumer.gradMissing);
+    return all.filter(c => !isAggStub(c.consumer));
 }
 
 /**
@@ -203,7 +214,9 @@ export function drawDataFlowBackward(args: IDataFlowArgs): BoundingBox3d {
             return drawLossSeed(args);
         }
         // 其他沒有下游的區塊：說不出所以然就別亂講
-        return note(args, 'no downstream gradient path');
+        return note(args, getGraphConsumers(state, blk).length > 0
+            ? 'gradient exists, but upstream activations were not recorded'
+            : 'no downstream gradient path');
     }
 
     if (consumers.length > 1) {
@@ -346,10 +359,32 @@ function drawMatmulBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d
             { text: ', ' },
             { cellX: 4, cellY: 1, color: otherColor },
             { text: ' )   ' },
-            { text: gradName(c.consumer.name) + ' ‧ ' + (other ? shortName(other.src.name) : '?') + '^T',
-              color: new Vec4(0.7, 0.7, 0.7, 1) },
+            { text: matmulHint(c, other), color: new Vec4(0.7, 0.7, 0.7, 1) },
         ],
     }));
+}
+
+/**
+ * 矩陣乘法反向的提示文字。
+ *
+ * 不要寫成 `A ‧ B^T` —— 轉置的方向會隨 blk 是被乘的哪一邊而變，
+ * 寫死樣板一定會在某一邊標錯（dWlm 實際上是 LNf^T ‧ dLogits，不是 dLogits ‧ LNf^T）。
+ * 改講「沿哪一軸加總」，那個永遠是對的。
+ */
+function matmulHint(c: IBlkConsumer, other: IBlkCellDep | null): string {
+    let sum = sumAxisLabel(c);
+    let names = gradName(c.consumer.name) + ' ‧ ' + (other ? shortName(other.src.name) : '?');
+    return sum ? `Σ ${sum}: ${names}` : names;
+}
+
+/** 反向要沿著消費者的哪一軸加總（＝沒有被 blk 決定的那一維）。 */
+export function sumAxisLabel(c: IBlkConsumer): string {
+    let d = freeDestDim(c.dep);
+    if (d === null) {
+        return '';
+    }
+    let style = d === Dim.X ? c.consumer.dimX : c.consumer.dimY;
+    return style === DimStyle.None ? '' : dimStyleTextShort(style);
 }
 
 /** S = Q K^T / √A 的反向：dQ = dS K / √A，dK = dS^T Q / √A。 */
@@ -486,29 +521,30 @@ function drawGeluBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
 export function drawBackwardDependences(state: IProgramState, blk: IBlkDef, idx: Vec3) {
     let layout = state.layout;
 
-    for (let c of getRealConsumers(state, blk)) {
-        if (c.consumer.opacity === 0) {
-            continue;
-        }
-
-        let destIdx = destIdxFromSrc(c.dep, idx, c.consumer);
-        let freeDim = freeDestDim(c.dep);
+    // 與箭頭共用同一份清單，兩者不可能再各說各話
+    for (let target of getBackwardArrowTargets(state, blk, idx)) {
+        let isConsumer = target.color === gradColor;
+        let dep = isConsumer
+            ? getRealConsumers(state, blk).find(c => c.consumer === target.blk)?.dep
+            : undefined;
+        let freeDim = dep ? freeDestDim(dep) : null;
 
         if (freeDim !== null) {
             // 這一格的梯度是沿著整條累加來的，把那一條都點亮
-            let sub = splitGridForHighlight(layout, c.consumer, freeDim === Dim.X ? Dim.Y : Dim.X,
-                destIdx.getAt(freeDim === Dim.X ? Dim.Y : Dim.X));
+            let acrossDim = freeDim === Dim.X ? Dim.Y : Dim.X;
+            let sub = splitGridForHighlight(layout, target.blk, acrossDim, target.idx.getAt(acrossDim));
             if (sub) {
                 sub.highlight = 0.5;
             }
-        } else {
-            let sub = splitGridForHighlight(layout, c.consumer, Dim.X, destIdx.x);
-            if (!sub) continue;
-            sub = splitGridForHighlight(layout, sub, Dim.Y, destIdx.y);
-            if (!sub) continue;
-            sub = splitGridForHighlight(layout, sub, Dim.Z, destIdx.z);
-            if (sub) sub.highlight = 0.5;
+            continue;
         }
+
+        let sub = splitGridForHighlight(layout, target.blk, Dim.X, target.idx.x);
+        if (!sub) continue;
+        sub = splitGridForHighlight(layout, sub, Dim.Y, target.idx.y);
+        if (!sub) continue;
+        sub = splitGridForHighlight(layout, sub, Dim.Z, target.idx.z);
+        if (sub) sub.highlight = 0.5;
     }
 }
 
@@ -528,18 +564,91 @@ function freeDestDim(dep: IBlkCellDep): Dim | null {
     return null;
 }
 
-/** 反向的箭頭要指向消費者的格子，供 DataFlow 的 drawDepArrows 使用。 */
+/**
+ * 反向的箭頭該指向哪些格子。
+ *
+ * 重點：**公式裡出現的每一個東西都要有箭頭**，而消費者只是其中之一。
+ * 例如 dWlm = dot( dLogits[...], LN[...] ) 有兩個運算元，但 LN 並不是
+ * 權重的消費者 —— 它是消費者那個點積裡的另一邊。只畫消費者的話，
+ * 畫面上就會只有一條橘色箭頭，公式卻有兩項，對不起來。
+ *
+ * 顏色與公式框裡的方塊一致：梯度橘、權重藍、中間值綠。
+ */
 export function getBackwardArrowTargets(state: IProgramState, blk: IBlkDef, destIdx: Vec3) {
     let out: { blk: IBlkDef, idx: Vec3, color: Vec4 }[] = [];
-    for (let c of getRealConsumers(state, blk)) {
-        if (c.consumer.opacity === 0) {
-            continue;
+
+    let push = (target: IBlkDef, idx: Vec3, color: Vec4) => {
+        if (target.opacity === 0) {
+            return;
         }
-        out.push({
-            blk: c.consumer,
-            idx: destIdxFromSrc(c.dep, destIdx, c.consumer),
-            color: gradColor,
-        });
+        out.push({ blk: target, idx, color });
+    };
+
+    let fwdColor = (b: IBlkDef) =>
+        b.t === 'w' ? Colors.Weights : b.t === 'a' ? Colors.Aggregates : Colors.Intermediates;
+
+    let consumers = getRealConsumers(state, blk);
+
+    // 圖的起點（logits）：公式是 P — onehot(target)，那個 P 在 softmax 那一塊
+    if (consumers.length === 0 && blk === state.layout.logits) {
+        let sm = state.layout.logitsSoftmax;
+        if (sm) {
+            push(sm, destIdx, fwdColor(sm));
+        }
+        return out;
     }
+
+    for (let c of consumers) {
+        let consumerIdx = destIdxFromSrc(c.dep, destIdx, c.consumer);
+
+        // 一定有的那一條：把梯度交給我的人
+        push(c.consumer, consumerIdx, gradColor);
+
+        // 點積的另一邊：它在公式裡，但不是消費者，所以要另外補
+        if (c.kind === 'dot') {
+            let other = otherDotOperand(c);
+            if (other) {
+                let contraction = blkContractionValue(blk, destIdx, c);
+                push(other.src, otherOperandIdx(other, consumerIdx, contraction), fwdColor(other.src));
+            }
+        }
+
+        // LayerNorm 的反向式裡有 γ，它也不是消費者
+        if (c.consumer.deps?.special === BlKDepSpecial.LayerNorm) {
+            let gamma = c.consumer.deps.add?.find(d => d.src.name === 'γ');
+            if (gamma) {
+                push(gamma.src, getDepSrcIdx(gamma, consumerIdx).srcIdx, fwdColor(gamma.src));
+            }
+        }
+    }
+
     return out;
+}
+
+/** blk 的哪個索引是前向點積的收縮軸，取它的值。 */
+function blkContractionValue(blk: IBlkDef, destIdx: Vec3, c: IBlkConsumer): number {
+    let m = c.dep.srcIdxMtx;
+    for (let k = 0; k < 3; k++) {
+        let bound = false;
+        for (let d = 0; d < 3; d++) {
+            if (m.g(k, d) === 1) bound = true;
+        }
+        if (!bound && m.g(k, 3) === 1) {
+            return k === 0 ? destIdx.x : k === 1 ? destIdx.y : destIdx.z;
+        }
+    }
+    return 0;
+}
+
+/** 點積另一邊的代表格：沿消費者的索引取，收縮軸用 blk 那一側的值釘住。 */
+function otherOperandIdx(other: IBlkCellDep, consumerIdx: Vec3, contraction: number): Vec3 {
+    let m = other.srcIdxMtx;
+    let v = m.mulVec4(Vec4.fromVec3(consumerIdx, 0));
+    let idx = new Vec3(v.x, v.y, v.z);
+    for (let k = 0; k < 3; k++) {
+        if (m.g(k, 3) === 1) {
+            idx.setAt(k, contraction);
+        }
+    }
+    return idx;
 }

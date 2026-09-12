@@ -16,7 +16,7 @@
 import { BlKDepSpecial, IBlkCellDep, IBlkDef } from "../GptModelLayout";
 import { IProgramState } from "../Program";
 import { getBlockValueAtIdx } from "./DataFlow";
-import { getRealConsumers, IBlkConsumer } from "./DataFlowBackward";
+import { getGraphConsumers, getRealConsumers, IBlkConsumer } from "./DataFlowBackward";
 import { gradName, shortName } from "./GradNames";
 import { DimStyle, dimStyleTextShort } from "../walkthrough/WalkthroughTools";
 import { Dim, Vec3 } from "@/src/utils/vector";
@@ -111,6 +111,11 @@ function idxAt(v: Vec3, d: number) {
 
 function op(blk: IBlkDef, detail: string, grad: boolean): IFormulaOperand {
     return { name: nameOf(blk, grad), detail, kind: kindOf(blk, grad) };
+}
+
+/** 這個區塊自己的兩個軸名，例如 'c, n_vocab'。 */
+function axisNames(blk: IBlkDef) {
+    return [dimLabel(blk.dimX), dimLabel(blk.dimY)].filter(a => a).join(', ');
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +328,17 @@ function describeBackward(state: IProgramState, blk: IBlkDef, idx: Vec3): Body {
                 ],
             };
         }
-        return { expr: '沒有下游把梯度交給這一塊', plain: true, operands: [] };
+        // 分清楚是圖的末端，還是下游存在但它的梯度沒被記錄
+        let hasDownstream = getGraphConsumers(state, blk).length > 0;
+        return hasDownstream
+            ? {
+                expr: '這一塊的梯度是有的，但下游的中間量沒有記錄，無法展開算式',
+                plain: true,
+                note: '這個範例只對第 0 層逐層保留中間量的梯度，'
+                    + '其餘各層只存了輸出與權重的梯度。',
+                operands: [],
+            }
+            : { expr: '沒有下游把梯度交給這一塊', plain: true, operands: [] };
     }
 
     if (consumers.length > 1) {
@@ -421,9 +436,17 @@ function describeBackwardOne(
             notes.push('同一個權重被每個位置共用，所以每個位置的責任都要算進來。');
         }
 
+        // 通式用「索引＋加總」寫，不用矩陣轉置 ——
+        // 反向的轉置方向會隨 blk 是被乘的哪一邊而變，寫成 A · Bᵀ 一定會在某一邊標錯。
+        // 這裡每個中括號就是該區塊自己的軸名，怎麼樣都不會寫反。
+        let rule = sp.sumLabel && other
+            ? `${self}[${axisNames(blk)}] = Σ ${sp.sumLabel}: `
+                + `${cn}[${axisNames(c.consumer)}] · ${on}[${axisNames(other.src)}]`
+            : `${self} = ${cn} · ${on}`;
+
         return {
             expr: `dot( ${cn}[${sp.gradSpan}], ${on}[${sp.otherSpan}] )`,
-            rule: `${self} = ${cn} · ${on}ᵀ`,
+            rule,
             note: notes.join('') || undefined,
             operands: [
                 { name: cn, detail: sp.gradSpan, kind: 'grad' },

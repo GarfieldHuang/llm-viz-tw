@@ -410,7 +410,7 @@ export function dimStyleTextShort(style: DimStyle) {
         case DimStyle.T: return 't';
         case DimStyle.A: return 'a';
         case DimStyle.C: return 'c';
-        case DimStyle.C4: return 'c';
+        case DimStyle.C4: return 'c4';   // 與 C 區隔：MLP 的權重是 C4 x C，兩軸都印 c 會分不出來
         default: return DimStyle[style];
     }
 }
