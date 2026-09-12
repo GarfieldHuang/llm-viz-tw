@@ -47,7 +47,7 @@ const shortNames: { [k: string]: string } = {
     'MLP Activation': 'Gelu',
     'MLP Result': 'MlpOut',
     'MLP Residual': 'Resid',
-    'MLP': 'MLP',
+    'MLP': 'Fc',          // layout 把「升維後的 fc 輸出」命名為 MLP，但解說裡叫它 Fc
     'Token Embed': 'Wte',
     'Position Embed': 'Wpe',
     'Input Embed': 'Emb',

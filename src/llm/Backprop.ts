@@ -123,6 +123,30 @@ export function createGradData(gl: WebGL2RenderingContext, model: IGptModelLink,
         add(b0.mlp.projLayer.weight, 'd_transformer.h.0.mlp.c_proj.weight');
     }
 
+    // --- 後續的 transformer block：只有輸出與權重有梯度，中間量沒有捕捉 ---
+    // （gen_grad_data.py 只對 block 0 逐層 retain_grad，詳解章節也都在那一層）
+    for (let i = 1; i < model.blocks.length; i++) {
+        let b = model.blocks[i];
+        if (!b) continue;
+        add(b.mlp.addLayer.output, `d_block${i}`);
+        add(b.attn.qkvWeight, `d_transformer.h.${i}.attn.c_attn.weight`);
+        add(b.attn.qkvBias, `d_transformer.h.${i}.attn.c_attn.bias`);
+        add(b.attn.proj.weight, `d_transformer.h.${i}.attn.c_proj.weight`);
+        add(b.attn.proj.bias, `d_transformer.h.${i}.attn.c_proj.bias`);
+        add(b.ln_1.normWeight, `d_transformer.h.${i}.ln_1.weight`);
+        add(b.ln_1.normBias, `d_transformer.h.${i}.ln_1.bias`);
+        add(b.ln_2.normWeight, `d_transformer.h.${i}.ln_2.weight`);
+        add(b.ln_2.normBias, `d_transformer.h.${i}.ln_2.bias`);
+        add(b.mlp.fcLayer.weight, `d_transformer.h.${i}.mlp.c_fc.weight`);
+        add(b.mlp.fcLayer.bias, `d_transformer.h.${i}.mlp.c_fc.bias`);
+        add(b.mlp.projLayer.weight, `d_transformer.h.${i}.mlp.c_proj.weight`);
+        add(b.mlp.projLayer.bias, `d_transformer.h.${i}.mlp.c_proj.bias`);
+    }
+
+    // --- 最後的 layer norm 與輸出頭 ---
+    add(model.ln_f.output, 'd_ln_f');
+    add(model.ln_f.normWeight, 'd_transformer.ln_f.weight');
+    add(model.ln_f.normBias, 'd_transformer.ln_f.bias');
     add(model.lm_head.output, 'd_lm_head');
     add(model.lm_head.weight, 'd_lm_head.weight');
 

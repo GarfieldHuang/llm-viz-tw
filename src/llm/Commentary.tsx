@@ -422,32 +422,51 @@ function markupSimple(inputStr: string): React.ReactNode {
     let italicLocs: number[] = [];
     let boldLocs: number[] = [];
 
+    // `**粗體**` 與 `_斜體_`。粗體的標記是兩個字元，斜體是一個，
+    // 所以節點要各自記住要裁掉幾個字（見 INode.pad）。
     let prevC = '';
-    let idx = 0;
-    for (let c of inputStr) {
+    for (let idx = 0; idx < inputStr.length; idx++) {
+        let c = inputStr[idx];
+        if (c === '*' && inputStr[idx + 1] === '*') {
+            boldLocs.push(idx);
+            idx++;          // 跳過第二顆星，別把 ** 讀成兩個標記
+            prevC = '*';
+            continue;
+        }
         if (c === '_' && ((italicLocs.length % 2) === 1 || !prevC.match(/[a-zA-Z0-9]/))) {
             italicLocs.push(idx);
-        // } else if (c === '*' && prevC !== '*') {
-        //     boldLocs.push(idx);
         }
         prevC = c;
-        idx++;
+    }
+
+    // 落單的標記（只有開頭沒有結尾）就不當標記用，原樣顯示比吃掉半段文字好
+    if (boldLocs.length % 2 === 1) {
+        boldLocs.pop();
+    }
+    if (italicLocs.length % 2 === 1) {
+        italicLocs.pop();
     }
 
     let nodesFlat: INode[] = [];
-    function addNodes(t: INode['t'], locs: number[]) {
+    function addNodes(t: INode['t'], locs: number[], pad: number) {
         for (let i = 0; i < Math.ceil(locs.length / 2); i++) {
-            nodesFlat.push({ t: t, start: locs[i * 2], end: (locs[i * 2 + 1] ?? inputStr.length) + 1 });
+            nodesFlat.push({
+                t: t,
+                start: locs[i * 2],
+                end: (locs[i * 2 + 1] ?? inputStr.length) + pad,
+                pad,
+            });
         }
     }
 
-    addNodes('i', italicLocs);
-    addNodes('b', boldLocs);
+    addNodes('i', italicLocs, 1);
+    addNodes('b', boldLocs, 2);
 
     interface INode {
         t: '' | 'b' | 'i';
         start: number; // inclusive
         end: number; // exclusive
+        pad: number; // 標記字元的寬度：_ 是 1，** 是 2
         children?: INode[];
     }
 
@@ -481,14 +500,14 @@ function markupSimple(inputStr: string): React.ReactNode {
         }
     }
 
-    let treeBase: INode = { t: '', start: 0, end: inputStr.length, children: [] };
+    let treeBase: INode = { t: '', start: 0, end: inputStr.length, pad: 0, children: [] };
 
     for (let node of nodesFlat) {
         insertIntoTree(treeBase, node);
     }
 
     function buildReactDom(node: INode, i: number) {
-        let pad = node.t === '' ? 0 : 1;
+        let pad = node.pad;
         let res: ReactNode[] = [];
         let children = node.children ?? []
         let segStart = node.start + pad;

@@ -19,7 +19,13 @@ import { walkthrough06_Projection } from "./Walkthrough06_Projection";
 import { walkthrough07_Mlp } from "./Walkthrough07_Mlp";
 import { walkthrough08_Transformer } from "./Walkthrough08_Transformer";
 import { walkthrough09_Output } from "./Walkthrough09_Output";
+import { walkthrough10_BackLoss } from "./Walkthrough10_BackLoss";
+import { walkthrough11_BackMlp } from "./Walkthrough11_BackMlp";
+import { walkthrough12_BackResidual } from "./Walkthrough12_BackResidual";
+import { walkthrough13_BackProjection } from "./Walkthrough13_BackProjection";
 import { walkthrough14_BackAttention } from "./Walkthrough14_BackAttention";
+import { walkthrough15_BackLayerNorm } from "./Walkthrough15_BackLayerNorm";
+import { walkthrough16_BackEmbedding } from "./Walkthrough16_BackEmbedding";
 
 
 /**
@@ -224,7 +230,14 @@ export function runWalkthrough(state: IProgramState, view: IRenderView) {
         walkthrough08_Transformer(wtArgs);
         walkthrough09_Output(wtArgs);
     } else if (groupId === PhaseGroup.Backward) {
+        // 依反向的流向排列：損失 -> MLP -> 殘差 -> 投射 -> 注意力 -> 層歸一化 -> 嵌入
+        walkthrough10_BackLoss(wtArgs);
+        walkthrough11_BackMlp(wtArgs);
+        walkthrough12_BackResidual(wtArgs);
+        walkthrough13_BackProjection(wtArgs);
         walkthrough14_BackAttention(wtArgs);
+        walkthrough15_BackLayerNorm(wtArgs);
+        walkthrough16_BackEmbedding(wtArgs);
     }
 
     wt.prevPhase = wt.phase;
