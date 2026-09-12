@@ -28,7 +28,11 @@ export function walkthrough10_BackLoss(args: IWalkthroughArgs) {
 
 所以我們問一個**反事實**的問題：在位置 ${c_dimRef('t = 5', DimStyle.T)}，
 模型深信下一個字是 "A"，如果正解其實是 "C" 呢？誤差會怎麼往回傳？
-這樣算出來的梯度乾淨、好看，而且好驗證。`;
+這樣算出來的梯度乾淨、好看，而且好驗證。
+
+（接下來各章的矩陣式，一律用**畫面上看到的形狀**來寫：每個區塊就是一個矩陣，
+列是橫的、行是直的。例如 Layer Norm 在畫面上是 (C, t)，式子裡就當它是 (C, t)。
+滑鼠移到任一格上，側邊欄會用同一套座標把算式展開。）`;
     breakAfter();
 
     let t_moveCamera = afterTime(null, 1.6);
@@ -37,7 +41,7 @@ export function walkthrough10_BackLoss(args: IWalkthroughArgs) {
     breakAfter();
     commentary(wt)`
 現在看 ${c_blockRef('Logits Softmax', layout.logitsSoftmax)} 這一塊 ——
-把滑鼠移上去，浮層會寫 **no gradient data**。
+把滑鼠移上去，浮層會告訴你**這一塊沒有梯度資料**。
 
 那不是漏掉，是刻意的。我們**不對機率微分**。
 
@@ -70,7 +74,7 @@ dL/dlogits = p − y
     commentary(wt)`
 接著梯度分兩路走。
 
-一路進 ${c_blockRef('LM Head 權重', layout.lmHeadWeight)}：dWlm = dLogits ᵀ · LNf。
+一路進 ${c_blockRef('LM Head 權重', layout.lmHeadWeight)}：dWlm = dLogits · LNfᵀ。
 這是輸出層要怎麼調 —— optimizer 拿得走的第一份東西。
 
 另一路往下，回到 ${c_blockRef('最後的 Layer Norm', layout.ln_f.lnResid)}：dLNf = Wlm ᵀ · dLogits。

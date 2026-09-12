@@ -14,6 +14,7 @@ export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
 
     let block0 = layout.blocks[0];
     let heads = block0.heads;
+    let { A } = layout.shape;
 
     setInitialCamera(state, new Vec3(-73.167, 0.000, -270.725), new Vec3(293.606, 2.613, 1.366));
     wt.dimHighlightBlocks = [block0.attnOut, ...heads.map(h => h.vOutBlock)];
@@ -35,7 +36,7 @@ export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
 
 投射是個標準的矩陣乘法 O = Wproj · V，所以反向也是標準的兩條：
 
-dWproj = dO ᵀ · V　　dV = Wproj ᵀ · dO
+dWproj = dO · Vᵀ　　dV = Wprojᵀ · dO
 
 先看權重那一條。${c_blockRef('投射權重', block0.projWeight)} 是
 ${c_dimRef('C', DimStyle.C)} × ${c_dimRef('C', DimStyle.C)} 的方陣 ——
@@ -82,10 +83,14 @@ head 1 佔接下來 A 個，依此類推。**串接在反向就是切開。**
         processBackwardChain(state, t_dProjW, [block0.attnOut, block0.projWeight]);
     }
     if (t_dHeads.t > 0) {
-        // 串接的反向＝切開：先用一格演給你看，它同時落到三個 head 上
-        flyCopies(state, t_dHeads,
-            { blk: block0.attnOut, idx: new Vec3(5, 20, 0) },
-            heads.map((h, i) => ({ blk: h.vOutBlock, idx: new Vec3(5, 4 + i * 2, 0) })));
+        // 串接的反向＝切開。注意這裡不能畫成「同一格複製給三個 head」——
+        // 切開的意思是三**段不同**的值各給一個 head，複製會講成完全相反的事。
+        // 所以各自從對應的通道帶飛出去：前 A 個給 head 0、中間 A 個給 head 1、依此類推。
+        for (let i = 0; i < heads.length; i++) {
+            flyCopies(state, t_dHeads,
+                { blk: block0.attnOut, idx: new Vec3(5, i * A + Math.floor(A / 2), 0) },
+                [{ blk: heads[i].vOutBlock, idx: new Vec3(5, Math.floor(A / 2), 0) }]);
+        }
 
         processBackwardChain(state, t_dHeads, [
             block0.attnOut, ...heads.map(h => h.vOutBlock),

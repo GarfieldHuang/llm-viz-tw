@@ -75,7 +75,7 @@ dFc 的第 i 格只看 Fc 的第 i 格，不看同一列的其他人。
 最後收權重。MLP 佔了整個模型大約三分之二的參數，所以這四塊是這一層裡
 optimizer 拿走最多東西的地方：
 
-dWfc = dFc ᵀ · LN2　　dWproj = dMlp ᵀ · Gelu
+dWfc = LN2 · dFc　　dWmlp = dMlpOut · Gelu
 
 偏置的梯度更簡單 —— 它對每個位置都加同一個數，所以反向就是**把整批位置加起來**。
 浮層在偏置上會多一個 Σ，就是這個意思。`;

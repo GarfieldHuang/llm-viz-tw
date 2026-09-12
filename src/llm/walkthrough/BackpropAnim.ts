@@ -12,7 +12,7 @@
  *
  * 時間一律用 smoothstep 緩動，動作才不會一開始就衝出去。
  */
-import { duplicateGrid, findSubBlocks, splitGrid, splitGridAll } from "../Annotations";
+import { duplicateGrid, splitGrid, splitGridAll } from "../Annotations";
 import { cellPosition, getBlkDimensions, IBlkDef, setBlkPosition } from "../GptModelLayout";
 import { IProgramState } from "../Program";
 import { drawText, IFontOpts, measureText } from "../render/fontRender";
@@ -79,7 +79,6 @@ export function flyCopies(
     cell.highlight = 0.7;
 
     let from = getBlkDimensions(cell).tl;
-    let t = lerpSmoothstep(0, 1, timer.t);
 
     for (let i = 0; i < dests.length; i++) {
         let d = dests[i];
@@ -98,9 +97,6 @@ export function flyCopies(
             drawSymbolAt(state, to.add(new Vec3(-state.layout.cell * 1.2, state.layout.cell * 0.5, 0)), opts.symbol);
         }
     }
-
-    // 原件留在原地當參照
-    void t;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,8 +139,7 @@ export function flyPairDot(
     let stageTop = destPos.add(new Vec3(-layout.cell * 14, -layout.cell * 2, layout.cell * 2));
     let sumPos = stageTop.add(new Vec3(layout.cell * 1.5, layout.cell * (n + 2) * 1.2, 0));
 
-    // 三個階段：飛到集合點(0~.45) -> 收攏相加(.45~.8) -> 結果飛進目的地(.8~1)
-    let tGather = lerpSmoothstep(0, 1, inverseLerp(0.0, 0.45, timer.t));
+    // 三個階段：飛到集合點(每格各自錯開) -> 收攏相加(.45~.8) -> 結果飛進目的地(.8~1)
     let tCollapse = lerpSmoothstep(0, 1, inverseLerp(0.45, 0.8, timer.t));
     let tLand = lerpSmoothstep(0, 1, inverseLerp(0.8, 1.0, timer.t));
 
@@ -192,8 +187,6 @@ export function flyPairDot(
             setBlkPosition(destCell, landInit.lerp(destPos, tLand));
         }
     }
-
-    void tGather;
 }
 
 function sliceOf(state: IProgramState, s: { blk: IBlkDef, alongX: boolean, fixed: number }): IBlkDef | null {

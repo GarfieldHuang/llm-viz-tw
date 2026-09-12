@@ -38,7 +38,7 @@ export function walkthrough14_BackAttention(args: IWalkthroughArgs) {
 ${c_blockRef('P', head2.attnMtxSm)} 是 softmax 之後的注意力權重。
 這是一個純矩陣乘法，反向就是轉置相乘：
 
-dV = Pᵀ dO　　dP = dO Vᵀ
+dV = dO · P　　dP = dOᵀ · V
 
 也就是說，${c_blockRef('V', head2.vBlock)} 收到的梯度，是把輸出的梯度依照注意力權重「分配」回去 ——
 某個位置被關注得越多，它要負的責任就越大。`;
@@ -65,9 +65,9 @@ dS = P ⊙ ( dP − rowsum(P ⊙ dP) )
     breakAfter();
     commentary(wt)`
 最後回到 ${c_blockRef('Q', head2.qBlock)} 與 ${c_blockRef('K', head2.kBlock)}。
-分數是 S = Q Kᵀ / √${c_dimRef('A', DimStyle.A)}，所以
+分數是 S = Qᵀ K / √${c_dimRef('A', DimStyle.A)}，所以
 
-dQ = dS K / √A　　dK = dSᵀ Q / √A
+dQ = K · dSᵀ / √A　　dK = Q · dS / √A
 
 注意一件事：因為損失只看第 5 個位置，${c_blockRef('Q', head2.qBlock)} 只有**第 5 行**有梯度，
 但 ${c_blockRef('K', head2.kBlock)} 和 ${c_blockRef('V', head2.vBlock)} 有**前六行**都有梯度。
@@ -83,7 +83,7 @@ dQ = dS K / √A　　dK = dSᵀ Q / √A
 到這裡為止算的都是**中間量**的梯度，它們算完就丟。真正要留下來的是最後這一步：
 ${c_blockRef('權重', head2.qWeightBlock)} 的梯度。
 
-dWq = dQᵀ · LN　　dWk = dKᵀ · LN　　dWv = dVᵀ · LN
+dWq = dQ · LNᵀ　　dWk = dK · LNᵀ　　dWv = dV · LNᵀ
 
 每一格的意思是：「把這個權重調高一點點，損失會變多少」。optimizer 拿走的就是這張表 ——
 整個反向傳播跑這一趟，為的就是它。
