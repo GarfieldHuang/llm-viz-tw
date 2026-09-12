@@ -26,8 +26,8 @@ Layer Norm 的反向是這整趟裡最容易算錯的一段，原因很具體：
 反向就必須把這個牽連還回去。`;
     breakAfter();
 
-    let t_moveCamera = afterTime(null, 1.0);
-    let t_fade = afterTime(null, 0.8);
+    let t_moveCamera = afterTime(null, 1.6);
+    let t_fade = afterTime(null, 1.3);
 
     breakAfter();
     commentary(wt)`
@@ -41,7 +41,7 @@ dγ = Σ dLN ⊙ xn　　dβ = Σ dLN
 式子裡的 xn 指的是歸一化之後、還沒乘 γ 之前的值。`;
     breakAfter();
 
-    let t_dGammaBeta = afterTime(null, 2.5);
+    let t_dGammaBeta = afterTime(null, 4.0);
 
     breakAfter();
     commentary(wt)`
@@ -60,7 +60,7 @@ dx = (γ / σ) ⊙ ( d − E[d] − xn ⊙ E[d ⊙ xn] )
 第三項 xn ⊙ E[d ⊙ xn] 是**扣掉與自己方向相關的部分** —— 因為前向除過 σ。`;
     breakAfter();
 
-    let t_dX = afterTime(null, 3.5);
+    let t_dX = afterTime(null, 5.6);
 
     breakAfter();
     commentary(wt)`
@@ -76,7 +76,7 @@ dx = (γ / σ) ⊙ ( d − E[d] − xn ⊙ E[d ⊙ xn] )
 你在浮層上看到的 E[...] 就是整行的聚合。MLP 裡沒有這種東西。`;
     breakAfter();
 
-    let t_settle = afterTime(null, 1.0);
+    let t_settle = afterTime(null, 1.6);
 
     moveCameraTo(state, t_moveCamera, new Vec3(3.4, 0, -76.4), new Vec3(281, 9, 1.5));
 

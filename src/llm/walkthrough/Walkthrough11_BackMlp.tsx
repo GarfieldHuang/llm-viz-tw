@@ -3,6 +3,7 @@ import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
+import { flyPairDot } from "./BackpropAnim";
 
 export function walkthrough11_BackMlp(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -24,8 +25,8 @@ MLP 的反向是整個 transformer 裡最單純的一段，值得先看，因為
 反向就是倒著走這三步，而且**每一格各算各的**，彼此不干涉。`;
     breakAfter();
 
-    let t_moveCamera = afterTime(null, 1.0);
-    let t_fade = afterTime(null, 0.8);
+    let t_moveCamera = afterTime(null, 1.6);
+    let t_fade = afterTime(null, 1.3);
 
     breakAfter();
     commentary(wt)`
@@ -36,7 +37,7 @@ ${c_blockRef('MLP Result', block0.mlpResult)}。
 （那條分流我們在「殘差分流」那一章專門講。）`;
     breakAfter();
 
-    let t_dMlpOut = afterTime(null, 2.0);
+    let t_dMlpOut = afterTime(null, 3.2);
 
     breakAfter();
     commentary(wt)`
@@ -55,7 +56,7 @@ dFc = dGelu ⊙ gelu′(Fc)
 這正是激活函數同時決定「誰能出聲」和「誰要負責」的地方。`;
     breakAfter();
 
-    let t_dGelu = afterTime(null, 3.5);
+    let t_dGelu = afterTime(null, 5.6);
 
     breakAfter();
     commentary(wt)`
@@ -67,7 +68,7 @@ dFc 的第 i 格只看 Fc 的第 i 格，不看同一列的其他人。
 等一下你會看到 attention 完全不是這樣：那裡整列是綁在一起的。`;
     breakAfter();
 
-    let t_dLn2 = afterTime(null, 2.5);
+    let t_dLn2 = afterTime(null, 4.0);
 
     breakAfter();
     commentary(wt)`
@@ -80,7 +81,7 @@ dWfc = dFc ᵀ · LN2　　dWproj = dMlp ᵀ · Gelu
 浮層在偏置上會多一個 Σ，就是這個意思。`;
     breakAfter();
 
-    let t_dW = afterTime(null, 3.0);
+    let t_dW = afterTime(null, 4.8);
 
     moveCameraTo(state, t_moveCamera, new Vec3(-160.2, 0, -455.6), new Vec3(289.1, -8.9, 1.7));
 
@@ -108,6 +109,14 @@ dWfc = dFc ᵀ · LN2　　dWproj = dMlp ᵀ · Gelu
         processBackwardChain(state, t_dLn2, [block0.mlpFc, block0.ln2.lnResid]);
     }
     if (t_dW.t > 0) {
+        // 權重梯度是「沿著整批位置的點積」—— 讓格子成對飛出來相乘再相加，
+        // 比印一個 dot( , ) 清楚得多。只演前幾對，不然畫面塞不下。
+        flyPairDot(state, t_dW,
+            { blk: block0.mlpFc, alongX: false, fixed: 30 },
+            { blk: block0.ln2.lnResid, alongX: true, fixed: 12 },
+            { blk: block0.mlpFcWeight, idx: new Vec3(30, 12, 0) },
+            { maxPairs: 6 });
+
         processBackwardChain(state, t_dW, [
             block0.mlpFcWeight, block0.mlpFcBias,
             block0.mlpProjWeight, block0.mlpProjBias,

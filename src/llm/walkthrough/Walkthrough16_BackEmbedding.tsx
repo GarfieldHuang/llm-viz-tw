@@ -3,6 +3,8 @@ import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
+import { flyAccumulate } from "./BackpropAnim";
+import { getBlockValueAtIdx } from "../components/DataFlow";
 
 export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -22,8 +24,8 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
 一個運算的反向是另一個運算，但查表的反向是什麼？`;
     breakAfter();
 
-    let t_moveCamera = afterTime(null, 1.0);
-    let t_fade = afterTime(null, 0.8);
+    let t_moveCamera = afterTime(null, 1.6);
+    let t_fade = afterTime(null, 1.3);
 
     breakAfter();
     commentary(wt)`
@@ -36,7 +38,7 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
 而且用的是「加等於」而不是「等於」，因為同一行會被加很多次。`;
     breakAfter();
 
-    let t_dTok = afterTime(null, 3.0);
+    let t_dTok = afterTime(null, 4.8);
 
     breakAfter();
     commentary(wt)`
@@ -49,7 +51,7 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
 這也解釋了為什麼常見的詞學得快、罕見的詞學得慢：**梯度的累積次數就是出現次數**。`;
     breakAfter();
 
-    let t_dPos = afterTime(null, 3.0);
+    let t_dPos = afterTime(null, 4.8);
 
     breakAfter();
     commentary(wt)`
@@ -62,7 +64,7 @@ ${c_blockRef('位置嵌入表', layout.posEmbedObj)} 的情況剛好相反。
 它們在這次前向裡根本沒被用到（因果遮罩擋住了），自然也沒有責任。`;
     breakAfter();
 
-    let t_end = afterTime(null, 2.0);
+    let t_end = afterTime(null, 3.2);
 
     breakAfter();
     commentary(wt)`
@@ -89,6 +91,18 @@ optimizer 接手的就是這些數字。反向傳播的工作，到此為止。`
     focusBackwardScene(state, relevant, t_fade.t);
 
     if (t_dTok.t > 0) {
+        // scatter-add 的重點是「累加」：讓前六個位置的梯度一個接一個飛進詞嵌入表，
+        // 重複出現的 token 就會看到同一行被加了好幾次。
+        let srcs = [];
+        let dests = [];
+        for (let t = 0; t <= 5; t++) {
+            let tok = getBlockValueAtIdx(layout.idxObj, new Vec3(t, 0, 0));
+            if (tok === null || tok === undefined) continue;
+            srcs.push({ blk: layout.residual0, colIdx: t });
+            dests.push({ blk: layout.tokEmbedObj, colIdx: Math.round(tok) });
+        }
+        flyAccumulate(state, t_dTok, srcs, dests);
+
         processBackwardChain(state, t_dTok, [layout.residual0, layout.tokEmbedObj]);
     }
     if (t_dPos.t > 0) {

@@ -3,6 +3,7 @@ import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
+import { flyCopies } from "./BackpropAnim";
 
 export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -25,8 +26,8 @@ export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
 反向時，它也是唯一負責把責任**切開分回各個 head** 的地方。`;
     breakAfter();
 
-    let t_moveCamera = afterTime(null, 1.0);
-    let t_fade = afterTime(null, 0.8);
+    let t_moveCamera = afterTime(null, 1.6);
+    let t_fade = afterTime(null, 1.3);
 
     breakAfter();
     commentary(wt)`
@@ -41,7 +42,7 @@ ${c_dimRef('C', DimStyle.C)} × ${c_dimRef('C', DimStyle.C)} 的方陣 ——
 它學的是「怎麼把三個 head 的意見調配成一個結論」。`;
     breakAfter();
 
-    let t_dProjW = afterTime(null, 3.0);
+    let t_dProjW = afterTime(null, 4.8);
 
     breakAfter();
     commentary(wt)`
@@ -54,7 +55,7 @@ head 1 佔接下來 A 個，依此類推。**串接在反向就是切開。**
 最後 A 個是 head 2 的。不需要任何額外運算 —— 只是把同一塊東西按位置分給三個人。`;
     breakAfter();
 
-    let t_dHeads = afterTime(null, 3.5);
+    let t_dHeads = afterTime(null, 5.6);
 
     breakAfter();
     commentary(wt)`
@@ -65,7 +66,7 @@ head 1 佔接下來 A 個，依此類推。**串接在反向就是切開。**
 偏置對每個位置貢獻同一個數，所以每個位置的責任都要算到它頭上。`;
     breakAfter();
 
-    let t_dBias = afterTime(null, 1.5);
+    let t_dBias = afterTime(null, 2.4);
 
     moveCameraTo(state, t_moveCamera, new Vec3(-68.2, 0, -282.4), new Vec3(293.6, 2.6, 1.1));
 
@@ -81,7 +82,11 @@ head 1 佔接下來 A 個，依此類推。**串接在反向就是切開。**
         processBackwardChain(state, t_dProjW, [block0.attnOut, block0.projWeight]);
     }
     if (t_dHeads.t > 0) {
-        // 串接的反向＝切開：一份 dV 按維度區間分給三個 head
+        // 串接的反向＝切開：先用一格演給你看，它同時落到三個 head 上
+        flyCopies(state, t_dHeads,
+            { blk: block0.attnOut, idx: new Vec3(5, 20, 0) },
+            heads.map((h, i) => ({ blk: h.vOutBlock, idx: new Vec3(5, 4 + i * 2, 0) })));
+
         processBackwardChain(state, t_dHeads, [
             block0.attnOut, ...heads.map(h => h.vOutBlock),
         ]);

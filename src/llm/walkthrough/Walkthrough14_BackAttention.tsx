@@ -3,6 +3,7 @@ import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
+import { flyPairDot } from "./BackpropAnim";
 
 export function walkthrough14_BackAttention(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_str, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -28,8 +29,8 @@ export function walkthrough14_BackAttention(args: IWalkthroughArgs) {
 滑鼠移到任一格上，浮層顯示的會是**反向**的式子，箭頭也從「誰算出我」改成「誰把梯度交給我」。`;
     breakAfter();
 
-    let t_moveCamera = afterTime(null, 1.0);
-    let t_fade = afterTime(null, 0.8);
+    let t_moveCamera = afterTime(null, 1.6);
+    let t_fade = afterTime(null, 1.3);
 
     breakAfter();
     commentary(wt)`
@@ -43,7 +44,7 @@ dV = Pᵀ dO　　dP = dO Vᵀ
 某個位置被關注得越多，它要負的責任就越大。`;
     breakAfter();
 
-    let t_dV = afterTime(null, 3.0);
+    let t_dV = afterTime(null, 4.8);
 
     breakAfter();
     commentary(wt)`
@@ -59,7 +60,7 @@ dS = P ⊙ ( dP − rowsum(P ⊙ dP) )
 在 MLP 裡每個元素各算各的，在這裡整列是綁在一起的。`;
     breakAfter();
 
-    let t_dS = afterTime(null, 3.5);
+    let t_dS = afterTime(null, 5.6);
 
     breakAfter();
     commentary(wt)`
@@ -75,7 +76,7 @@ dQ = dS K / √A　　dK = dSᵀ Q / √A
 因果錐在梯度上直接看得見。`;
     breakAfter();
 
-    let t_dQK = afterTime(null, 3.0);
+    let t_dQK = afterTime(null, 4.8);
 
     breakAfter();
     commentary(wt)`
@@ -91,7 +92,7 @@ dWq = dQᵀ · LN　　dWk = dKᵀ · LN　　dWv = dVᵀ · LN
 中間量的梯度每個位置各自獨立，權重的梯度不是。`;
     breakAfter();
 
-    let t_dW = afterTime(null, 3.0);
+    let t_dW = afterTime(null, 4.8);
 
     moveCameraTo(state, t_moveCamera, new Vec3(-92.7, 0, -219), new Vec3(286, 12.8, 1.4));
 
@@ -117,6 +118,14 @@ dWq = dQᵀ · LN　　dWk = dKᵀ · LN　　dWv = dVᵀ · LN
         processBackwardChain(state, t_dQK, [head2.attnMtx, head2.qBlock, head2.kBlock]);
     }
     if (t_dW.t > 0) {
+        // 先把 dWq 的一格演出來：dQ 與 LN 的格子成對飛出、相乘、相加、落進權重。
+        // 這跟前向章節解釋 Q = Wq·LN 用的是同一套演法，只是來源換成梯度。
+        flyPairDot(state, t_dW,
+            { blk: head2.qBlock, alongX: true, fixed: 6 },
+            { blk: block0.ln1.lnResid, alongX: true, fixed: 20 },
+            { blk: head2.qWeightBlock, idx: new Vec3(20, 6, 0) },
+            { maxPairs: 6 });
+
         // 權重梯度：這一步沒有前置區塊，整條都要跑動畫
         processBackwardChain(state, t_dW, [
             head2.qWeightBlock, head2.kWeightBlock, head2.vWeightBlock,

@@ -3,6 +3,7 @@ import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
+import { flySliceTo } from "./BackpropAnim";
 
 export function walkthrough10_BackLoss(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -10,6 +11,9 @@ export function walkthrough10_BackLoss(args: IWalkthroughArgs) {
     if (wt.phase !== Phase.Backward_Loss) {
         return;
     }
+
+    // 損失只問這個位置，動畫也都圍著它演
+    let LOSS_POS = 5;
 
     setInitialCamera(state, new Vec3(-20.203, 0.000, -1642.819), new Vec3(281.600, -7.900, 2.298));
     wt.dimHighlightBlocks = [layout.logits, layout.logitsSoftmax];
@@ -27,8 +31,8 @@ export function walkthrough10_BackLoss(args: IWalkthroughArgs) {
 這樣算出來的梯度乾淨、好看，而且好驗證。`;
     breakAfter();
 
-    let t_moveCamera = afterTime(null, 1.0);
-    let t_fade = afterTime(null, 0.8);
+    let t_moveCamera = afterTime(null, 1.6);
+    let t_fade = afterTime(null, 1.3);
 
     breakAfter();
     commentary(wt)`
@@ -46,7 +50,7 @@ dL/dlogits = p − y
 所以實作上 softmax 這一層在反向根本不存在，梯度是直接落在 ${c_blockRef('Logits', layout.logits)} 上的。`;
     breakAfter();
 
-    let t_dLogits = afterTime(null, 2.5);
+    let t_dLogits = afterTime(null, 4.0);
 
     breakAfter();
     commentary(wt)`
@@ -60,7 +64,7 @@ dL/dlogits = p − y
 整個訓練訊號，就濃縮成這三個數字。`;
     breakAfter();
 
-    let t_dWlm = afterTime(null, 2.5);
+    let t_dWlm = afterTime(null, 4.0);
 
     breakAfter();
     commentary(wt)`
@@ -73,7 +77,7 @@ dL/dlogits = p − y
 這份梯度接下來要穿過三層 transformer，一路回到嵌入表。`;
     breakAfter();
 
-    let t_dLnf = afterTime(null, 2.5);
+    let t_dLnf = afterTime(null, 4.0);
 
     moveCameraTo(state, t_moveCamera, new Vec3(-24.4, 0, -1660.9), new Vec3(281.6, -7.9, 1.5));
 
@@ -88,7 +92,12 @@ dL/dlogits = p − y
     focusBackwardScene(state, relevant, t_fade.t);
 
     if (t_dLogits.t > 0) {
-        // 損失的種子：dLogits = p - y，沒有前置區塊
+        // 先演給你看：機率那一行整條飛下來，減去正解，落成 dLogits。
+        // 「預測減去答案」這句話，用看的比用讀的快。
+        flySliceTo(state, t_dLogits,
+            { blk: layout.logitsSoftmax, colIdx: LOSS_POS },
+            { blk: layout.logits, colIdx: LOSS_POS },
+            { symbol: '—' });
         processBackwardChain(state, t_dLogits, [layout.logits], { animateFirst: true });
     }
     if (t_dWlm.t > 0) {
