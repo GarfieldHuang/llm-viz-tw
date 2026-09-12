@@ -1,5 +1,6 @@
 import { blockDimension, dimProps, findSubBlocks, splitGrid, splitGridForHighlight } from "./Annotations";
 import { drawDataFlow, getBlockValueAtIdx } from "./components/DataFlow";
+import { drawBackwardDependences } from "./components/DataFlowBackward";
 import { BlKDepSpecial, IBlkCellDep, IBlkDef } from "./GptModelLayout";
 import { IProgramState } from "./Program";
 import { clamp, isNotNil } from "@/src/utils/data";
@@ -101,7 +102,12 @@ export function runMouseHitTesting(state: IProgramState) {
         blockDimension(state, state.layout, main, Dim.Y, main.dimY, 1.0);
 
         highlightCellUnderMouse(state, main, c, pt2);
-        drawDependences(state, main, ptIdx);
+        // 反向檢視下要點亮的是「把梯度交給這一格的人」，與前向的來源是不同的格子。
+        if (state.showGrads) {
+            drawBackwardDependences(state, main, ptIdx);
+        } else {
+            drawDependences(state, main, ptIdx);
+        }
         drawDataFlow(state, main, ptIdx);
     } else if (isNotNil(state.display.blkIdxHover)) {
         for (let idx of state.display.blkIdxHover) {

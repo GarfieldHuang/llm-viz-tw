@@ -33,6 +33,7 @@ export interface IBlkDef {
     rangeOffsetsX?: [number, number][]; // if this block has been split, map from [[s0, xOff], [s1, xOff], ...] to the original block
     rangeOffsetsY?: [number, number][];
     rangeOffsetsZ?: [number, number][];
+    gradMissing?: boolean; // 反向檢視下沒有對應的梯度貼圖，不得再被打開（會露出前向啟用值）
     highlight: number; // 0 - 1 (0 = no highlight, 1 = full highlight)
     opacity: number; // 0 - 1 (0 = transparent, 1 = opaque)
     special: BlkSpecial;

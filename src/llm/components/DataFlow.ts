@@ -15,8 +15,10 @@ import { BoundingBox3d, Dim, Vec3, Vec4 } from "@/src/utils/vector";
 import { Colors, DimStyle, dimStyleColor, dimStyleText, dimStyleTextShort } from "../walkthrough/WalkthroughTools";
 import { drawLineRect } from "./ModelCard";
 import { ITextBlock, sizeBlock, layoutBlock, drawBlock, mkTextBlock, TextBlockType, drawCells, ITextBlockArgs } from "./TextLayout";
+import { drawDataFlowBackward, getBackwardArrowTargets } from "./DataFlowBackward";
+import { gradColor, gradName } from "./GradNames";
 
-interface IDataFlowArgs {
+export interface IDataFlowArgs {
     state: IProgramState;
     center: Vec3;
     blk: IBlkDef;
@@ -25,7 +27,9 @@ interface IDataFlowArgs {
 }
 
 export function drawDataFlow(state: IProgramState, blk: IBlkDef, destIdx: Vec3, pinIdx?: Vec3) {
-    if (!blk.deps) {
+    // 權重區塊在前向沒有 deps（它們是葉子），所以前向浮層不該出現。
+    // 但反向剛好相反：dWq、dWv 正是整趟反向傳播的終點，一定要能點開來看。
+    if (!blk.deps && !state.showGrads) {
         return;
     }
     let prevPhase = state.render.sharedRender.activePhase;
@@ -55,7 +59,15 @@ export function drawDataFlow(state: IProgramState, blk: IBlkDef, destIdx: Vec3, 
 
     let bb = new BoundingBox3d();
 
-    if (blk.deps.lowerTri && destIdx.x > destIdx.y) {
+    if (state.showGrads) {
+        // 反向章節：格子裡是梯度，公式當然也要是反向的。
+        // 前向那一整組 dispatch 在這裡完全不適用 —— O = P V 反過來不是同一個式子。
+        bb = drawDataFlowBackward(dataFlowArgs);
+
+    } else if (!blk.deps) {
+        // 前向的權重葉子：沒有算式可講
+
+    } else if (blk.deps.lowerTri && destIdx.x > destIdx.y) {
         drawZeroSymbol(dataFlowArgs);
 
     } else if (blk.deps.special === BlKDepSpecial.InputEmbed) {
@@ -162,11 +174,11 @@ function projectToScreen(state: IProgramState, modelPos: Vec3) {
         0);
 }
 
-let weightSrcColor = new Vec4(0.4, 0.4, 0.9, 1);
-let workingSrcColor = new Vec4(0.3, 0.7, 0.3, 1);
+export let weightSrcColor = new Vec4(0.4, 0.4, 0.9, 1);
+export let workingSrcColor = new Vec4(0.3, 0.7, 0.3, 1);
 
-let opColor = new Vec4(0.9, 0.9, 0.9, 1);
-let backWhiteColor = new Vec4(0.0, 0.0, 0.0, 1).mul(1.0);
+export let opColor = new Vec4(0.9, 0.9, 0.9, 1);
+export let backWhiteColor = new Vec4(0.0, 0.0, 0.0, 1).mul(1.0);
 let nameColor = new Vec4(1.0, 1.0, 1.0, 1);
 let embedBlockHeight = 30;
 let tokEmbedBlockWidth = 40;
@@ -356,7 +368,7 @@ export function drawRoundedRect(state: IRenderState, tl: Vec3, br: Vec3, color: 
     addPrimitiveRestart(state.triRender);
 }
 
-function drawMaths(args: IDataFlowArgs, bottomMiddle: Vec3, textBlk: ITextBlock, pad?: number[] | number) {
+export function drawMaths(args: IDataFlowArgs, bottomMiddle: Vec3, textBlk: ITextBlock, pad?: number[] | number) {
     let { state, mtx } = args;
 
     let value = getBlockValueAtIdx(args.blk, args.destIdx);
@@ -502,7 +514,7 @@ function drawResidualAdd(args: IDataFlowArgs) {
     return drawMaths(args, center, textBlock);
 }
 
-function drawZeroSymbol(args: IDataFlowArgs) {
+export function drawZeroSymbol(args: IDataFlowArgs) {
     let { center, mtx } = args;
     let fontOpts: IFontOpts = { color: opColor, mtx, size: 16 };
 
@@ -730,9 +742,16 @@ function drawCellIndexAndValue(args: IDataFlowArgs, bb: BoundingBox3d): Bounding
     let xDim = mapDimToSub(blk.dimX, 0);
     let yDim = mapDimToSub(blk.dimY, 1);
 
+    // 反向檢視時標明「這是誰的梯度」，否則 T: 5, A: 3 看起來與前向一模一樣。
+    let gradLabel: ITextBlockArgs | null = null;
+    if (args.state.showGrads) {
+        gradLabel = { text: gradName(blk.name) + '  ', color: gradColor };
+    }
+
     let textBlock = mkTextBlock({
         opts: fontOpts,
         subs: [
+            gradLabel,
             xDim,
             xDim && yDim && { text: ', ' },
             yDim,
@@ -758,7 +777,7 @@ function drawCellIndexAndValue(args: IDataFlowArgs, bb: BoundingBox3d): Bounding
 
 function drawDepArrows(args: IDataFlowArgs, bb: BoundingBox3d) {
     let { state, mtx, blk, destIdx } = args;
-    if (!blk.deps) {
+    if (!blk.deps && !state.showGrads) {
         return;
     }
 
@@ -832,15 +851,23 @@ function drawDepArrows(args: IDataFlowArgs, bb: BoundingBox3d) {
         }
     }
 
-    if (blk.deps.add) {
-        for (let dep of blk.deps.add) {
-            drawDepArrow(dep);
+    // 箭頭的形狀前後向一致：來源 -> 公式框 -> 這一格。
+    // 差別在「誰是來源」—— 前向是 deps（算出我的人），反向是消費者（把梯度交給我的人）。
+    if (state.showGrads) {
+        for (let target of getBackwardArrowTargets(state, blk, destIdx)) {
+            drawArrow(target.blk, target.idx, target.color, false);
         }
-    }
-    if (blk.deps.dot) {
-        let dotLen = getDepDotLen(blk, destIdx);
-        for (let dep of blk.deps.dot) {
-            drawDepArrow(dep, dotLen);
+    } else if (blk.deps) {
+        if (blk.deps.add) {
+            for (let dep of blk.deps.add) {
+                drawDepArrow(dep);
+            }
+        }
+        if (blk.deps.dot) {
+            let dotLen = getDepDotLen(blk, destIdx);
+            for (let dep of blk.deps.dot) {
+                drawDepArrow(dep, dotLen);
+            }
         }
     }
     drawFinalArrow();

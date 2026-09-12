@@ -73,6 +73,9 @@ function makeGradTex(
 
     let tex = createBufferTex(gl, forward.width, forward.height, forward.channels);
     writeToBufferTex(gl, tex, buf);
+    // 浮層要讀得到數字：getBlockValueAtIdx 走的是 localBuffer，不是 GPU 貼圖。
+    // 不設這個，反向的公式後面永遠只有一個空的等號。
+    tex.localBuffer = buf;
     out.set(forward, tex);
     scales.set(forward, pickScale(src));
 }
@@ -157,9 +160,16 @@ function applyToBlk(blk: IBlkDef, grads: IGradData) {
             // 因此改用該張量自己的 1/max|g| 正規化。
             let scale = grads.scaleByForward.get(blk.access.src) ?? 1.0;
             blk.access = { ...blk.access, src: gradTex, scale };
+            blk.gradMissing = false;
         } else {
+            // 注意：這裡只關掉取值，src 仍指向前向貼圖。
+            // 任何人若把 disable 轉回 false，露出來的會是前向啟用值卻染成梯度的顏色，
+            // 因此打上 gradMissing 讓動畫知道這一塊永遠不准打開。
             blk.access = { ...blk.access, disable: true };
+            blk.gradMissing = true;
         }
+    } else {
+        blk.gradMissing = true;
     }
     if (blk.subs) {
         for (let sub of blk.subs) {

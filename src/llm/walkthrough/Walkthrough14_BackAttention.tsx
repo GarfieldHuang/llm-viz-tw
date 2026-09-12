@@ -2,7 +2,7 @@ import React from 'react';
 import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
-import { focusBackwardScene, processDownFrom } from "./BackpropTools";
+import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
 
 export function walkthrough14_BackAttention(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_str, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -23,7 +23,9 @@ export function walkthrough14_BackAttention(args: IWalkthroughArgs) {
 反向時梯度就要沿著這三條路徑分頭送回去。
 
 畫面上顯示的不再是啟用值，而是**梯度**：每一格的顏色代表「這個數字改變一點點，損失會變多少」。
-灰色代表梯度為 0 —— 那不是壞掉，是那個位置對損失完全沒有影響。`;
+灰色代表梯度為 0 —— 那不是壞掉，是那個位置對損失完全沒有影響。
+
+滑鼠移到任一格上，浮層顯示的會是**反向**的式子，箭頭也從「誰算出我」改成「誰把梯度交給我」。`;
     breakAfter();
 
     let t_moveCamera = afterTime(null, 1.0);
@@ -75,6 +77,22 @@ dQ = dS K / √A　　dK = dSᵀ Q / √A
 
     let t_dQK = afterTime(null, 3.0);
 
+    breakAfter();
+    commentary(wt)`
+到這裡為止算的都是**中間量**的梯度，它們算完就丟。真正要留下來的是最後這一步：
+${c_blockRef('權重', head2.qWeightBlock)} 的梯度。
+
+dWq = dQᵀ · LN　　dWk = dKᵀ · LN　　dWv = dVᵀ · LN
+
+每一格的意思是：「把這個權重調高一點點，損失會變多少」。optimizer 拿走的就是這張表 ——
+整個反向傳播跑這一趟，為的就是它。
+
+注意權重的梯度是**整批位置加總**後的結果：同一個 Wq 被六個位置共用，所以六個位置的責任全部疊在同一格上。
+中間量的梯度每個位置各自獨立，權重的梯度不是。`;
+    breakAfter();
+
+    let t_dW = afterTime(null, 3.0);
+
     moveCameraTo(state, t_moveCamera, new Vec3(-92.7, 0, -219), new Vec3(286, 12.8, 1.4));
 
     let relevant = new Set([
@@ -83,14 +101,26 @@ dQ = dS K / √A　　dK = dSᵀ Q / √A
     ]);
     focusBackwardScene(state, relevant, t_fade.t);
 
-    // 反向逐格顯示：從 V Output 一路回到 Q / K
+    // 每一步明講要填哪些區塊。
+    // 這些鏈是照**反向圖**列的，不是照畫面上的擺放順序 ——
+    // 舊版用陣列區間掃描，會漏掉 V、又在講 Q K 時把 V 點亮。
     if (t_dV.t > 0) {
-        processDownFrom(state, t_dV, head2.vOutBlock, head2.attnMtxSm);
+        // dO 已知 -> 分頭送給 dV 與 dP
+        processBackwardChain(state, t_dV, [head2.vOutBlock, head2.vBlock, head2.attnMtxSm]);
     }
     if (t_dS.t > 0) {
-        processDownFrom(state, t_dS, head2.attnMtxSm, head2.attnMtx);
+        // dP -> 穿過 softmax -> dS（中間那兩根聚合樁不在路徑上，跳過）
+        processBackwardChain(state, t_dS, [head2.attnMtxSm, head2.attnMtx]);
     }
     if (t_dQK.t > 0) {
-        processDownFrom(state, t_dQK, head2.attnMtx, head2.qBlock);
+        // dS -> dQ 與 dK。V 不在這一步，它的梯度在第一步就拿到了。
+        processBackwardChain(state, t_dQK, [head2.attnMtx, head2.qBlock, head2.kBlock]);
+    }
+    if (t_dW.t > 0) {
+        // 權重梯度：這一步沒有前置區塊，整條都要跑動畫
+        processBackwardChain(state, t_dW, [
+            head2.qWeightBlock, head2.kWeightBlock, head2.vWeightBlock,
+            head2.qBiasBlock, head2.kBiasBlock, head2.vBiasBlock,
+        ], { animateFirst: true });
     }
 }
