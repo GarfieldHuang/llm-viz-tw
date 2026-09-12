@@ -1,0 +1,120 @@
+.panel {
+    border-top: 1px solid #d0d0d0;
+    background: #fafafa;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.5;
+    max-height: 240px;
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.idle {
+    color: #999;
+    font-size: 12px;
+    padding: 10px;
+}
+
+.head {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.dirTag {
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.forward { background: #3a7d3a; }
+.backward { background: #d2801f; }
+
+.target {
+    font-weight: 600;
+    font-size: 15px;
+}
+
+.gradName { color: #c06010; }
+
+.index {
+    color: #666;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+}
+
+.exprRow, .valueRow {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.eq {
+    color: #999;
+    flex-shrink: 0;
+}
+
+.expr {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    word-break: break-word;
+}
+
+.value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 600;
+}
+
+.rule {
+    margin-top: 6px;
+    padding: 4px 8px;
+    background: #eef1f5;
+    border-left: 3px solid #9aa8bd;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    word-break: break-word;
+}
+
+.operands {
+    margin-top: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.operand {
+    display: flex;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.opName {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    flex-shrink: 0;
+    min-width: 78px;
+    font-weight: 600;
+}
+
+.kind_grad { color: #c06010; }
+.kind_weight { color: #4646b4; }
+.kind_value { color: #2f7a2f; }
+.kind_agg { color: #8a6d1f; }
+.kind_const { color: #666; }
+
+.opDetail { color: #555; }
+
+.note {
+    margin-top: 6px;
+    color: #555;
+    font-size: 12px;
+    border-top: 1px dashed #d8d8d8;
+    padding-top: 5px;
+}
+
+.plainExpr {
+    font-family: inherit;
+    color: #555;
+}
