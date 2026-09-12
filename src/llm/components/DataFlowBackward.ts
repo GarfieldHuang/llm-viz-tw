@@ -247,11 +247,11 @@ export function drawDataFlowBackward(args: IDataFlowArgs): BoundingBox3d {
 
     // 沒有梯度資料的區塊：明講，不要假裝有東西
     if (blk.gradMissing) {
-        return note(args, 'no gradient data');
+        return note(args, 'no grad data');
     }
 
     if (isAggStub(blk)) {
-        return note(args, '(folded into the backward formula)');
+        return note(args, 'folded into backward');
     }
 
     let consumers = getRealConsumers(state, blk);
@@ -262,9 +262,11 @@ export function drawDataFlowBackward(args: IDataFlowArgs): BoundingBox3d {
             return drawLossSeed(args);
         }
         // 其他沒有下游的區塊：說不出所以然就別亂講
+        // 梯度是真的，只是展開算式要用的中間量沒存 -> 標成「只有數值」。
+        // 完整說明在側邊欄，浮層放不下也畫不出中文。
         return note(args, getGraphConsumers(state, blk).length > 0
-            ? 'gradient exists, but upstream activations were not recorded'
-            : 'no downstream gradient path');
+            ? 'grad value only'
+            : 'no grad path');
     }
 
     if (consumers.length > 1) {
@@ -569,7 +571,7 @@ function drawEmbedScatter(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
         subs: [
             { text: selfName(args) + ' += ', color: gradColor },
             { cellX: 1, cellY: 1, color: gradColor },
-            { text: '   scatter-add, only rows that were looked up',
+            { text: '   scatter-add (looked-up columns only)',
               color: new Vec4(0.7, 0.7, 0.7, 1) },
         ],
     }));

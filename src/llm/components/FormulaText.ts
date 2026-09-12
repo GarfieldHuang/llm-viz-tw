@@ -334,15 +334,18 @@ function describeBackward(state: IProgramState, blk: IBlkDef, idx: Vec3): Body {
         }
         // 分清楚是圖的末端，還是下游存在但它的梯度沒被記錄
         let hasDownstream = getGraphConsumers(state, blk).length > 0;
+        // 不要用「上游／下游」這種方向詞 —— 前向與反向的方向剛好相反，
+        // 讀者根本分不清是哪一個。直接講具體發生什麼事。
         return hasDownstream
             ? {
-                expr: '這一塊的梯度是有的，但下游的中間量沒有記錄，無法展開算式',
+                expr: '梯度是真的（下面那個數字），只是畫不出算式',
                 plain: true,
-                note: '這個範例只對第 0 層逐層保留中間量的梯度，'
-                    + '其餘各層只存了輸出與權重的梯度。',
+                note: '要把算式展開，需要算這個梯度時用到的另一個量，'
+                    + '而這個範例沒有把它存下來 —— 只有第 0 層逐層保留了中間量的梯度，'
+                    + '其餘各層只存了輸出與權重的梯度。數值本身是正確的，optimizer 用的就是它。',
                 operands: [],
             }
-            : { expr: '沒有下游把梯度交給這一塊', plain: true, operands: [] };
+            : { expr: '沒有任何東西把梯度交給這一塊', plain: true, operands: [] };
     }
 
     if (consumers.length > 1) {

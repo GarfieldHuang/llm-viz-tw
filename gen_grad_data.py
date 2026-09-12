@@ -95,36 +95,46 @@ def main():
     pos_emb = cap('pos_emb', model.transformer.wpe(pos))
     x = cap('x', tok_emb + pos_emb)
 
-    t0 = model.transformer.h[0]
-    ln1 = cap('ln1', t0.ln_1(x))
+    # 逐層展開，每一層的中間量都 retain_grad。
+    # 原本只對第 0 層這麼做，其餘各層直接 block(h) 帶過 —— 結果視覺化裡
+    # 滑到後面幾層的區塊只有權重有梯度，中間量一律空白。
+    # 第 0 層沿用無前綴的名字（verify() 與既有的 Backprop.ts 對接都靠它），
+    # 其餘各層加上 b1. / b2. 前綴。
+    def run_block(block, x, prefix):
+        def c(name, t):
+            return cap(prefix + name, t)
 
-    qkv = cap('qkv', t0.attn.c_attn(ln1))
-    q_, k_, v_ = qkv.split(n_embd, dim=2)
-    q = cap('q', q_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
-    k = cap('k', k_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
-    v = cap('v', v_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
+        ln1 = c('ln1', block.ln_1(x))
 
-    att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-    att = att.masked_fill(t0.attn.bias[:, :, :T, :T] == 0, float('-inf'))
-    att = cap('att', att)
-    attSm = cap('attSm', F.softmax(att, dim=-1))
-    y_ = attSm @ v
-    y = cap('y', y_.transpose(1, 2).contiguous().view(B, T, n_embd))
-    yProj = cap('yProj', t0.attn.c_proj(y))
+        qkv = c('qkv', block.attn.c_attn(ln1))
+        q_, k_, v_ = qkv.split(n_embd, dim=2)
+        q = c('q', q_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
+        k = c('k', k_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
+        v = c('v', v_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
 
-    attnResid = cap('attnResid', x + yProj)
-    ln2 = cap('ln2', t0.ln_2(attnResid))
-    fc = cap('fc', t0.mlp.c_fc(ln2))
-    gelu = cap('gelu', t0.mlp.act(fc))
-    mlp = cap('mlp', t0.mlp.c_proj(gelu))
-    mlpResid = cap('mlpResid', attnResid + mlp)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(block.attn.bias[:, :, :T, :T] == 0, float('-inf'))
+        att = c('att', att)
+        attSm = c('attSm', F.softmax(att, dim=-1))
+        y_ = attSm @ v
+        y = c('y', y_.transpose(1, 2).contiguous().view(B, T, n_embd))
+        yProj = c('yProj', block.attn.c_proj(y))
 
-    h = mlpResid
-    captured['block0'] = h
+        attnResid = c('attnResid', x + yProj)
+        ln2 = c('ln2', block.ln_2(attnResid))
+        fc = c('fc', block.mlp.c_fc(ln2))
+        gelu = c('gelu', block.mlp.act(fc))
+        mlp = c('mlp', block.mlp.c_proj(gelu))
+        mlpResid = c('mlpResid', attnResid + mlp)
+        return mlpResid
+
+    h = x
     for i, block in enumerate(model.transformer.h):
-        if i == 0:
-            continue
-        h = cap(f'block{i}', block(h))
+        prefix = '' if i == 0 else f'b{i}.'
+        h = run_block(block, h, prefix)
+        # 區塊輸出另外取一個名字，方便視覺化端直接對接
+        captured[f'block{i}'] = h
+
     ln_f = cap('ln_f', model.transformer.ln_f(h))
     logits = cap('lm_head', model.lm_head(ln_f))
     probs = cap('probs', F.softmax(logits, dim=-1))

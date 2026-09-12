@@ -92,43 +92,29 @@ export function createGradData(gl: WebGL2RenderingContext, model: IGptModelLink,
     add(model.posEmbed.weight, 'd_transformer.wpe.weight');
     add(model.add.output, 'd_x');
 
-    // --- 只有第 0 個 transformer block 有逐層的中間量梯度（詳解章節都在這一層）---
-    let b0 = model.blocks[0];
-    if (b0) {
-        add(b0.ln_1.output, 'd_ln1');
-        add(b0.attn.qkvOutput, 'd_qkv');
-        add(b0.attn.attnMatrix, 'd_att');
-        add(b0.attn.attnMatrixSoftmax, 'd_attSm');
-        add(b0.attn.scaledVectors, 'd_y');
-        add(b0.attn.proj.output, 'd_yProj');
-        add(b0.attn.add.output, 'd_attnResid');
-        add(b0.ln_2.output, 'd_ln2');
-        add(b0.mlp.fcLayer.output, 'd_fc');
-        add(b0.mlp.mlpGelu, 'd_gelu');
-        add(b0.mlp.projLayer.output, 'd_mlp');
-        add(b0.mlp.addLayer.output, 'd_mlpResid');
-
-        // 權重的梯度
-        add(b0.attn.qkvWeight, 'd_transformer.h.0.attn.c_attn.weight');
-        add(b0.attn.qkvBias, 'd_transformer.h.0.attn.c_attn.bias');
-        add(b0.ln_1.normWeight, 'd_transformer.h.0.ln_1.weight');
-        add(b0.ln_1.normBias, 'd_transformer.h.0.ln_1.bias');
-        add(b0.ln_2.normWeight, 'd_transformer.h.0.ln_2.weight');
-        add(b0.ln_2.normBias, 'd_transformer.h.0.ln_2.bias');
-        add(b0.attn.proj.bias, 'd_transformer.h.0.attn.c_proj.bias');
-        add(b0.mlp.fcLayer.bias, 'd_transformer.h.0.mlp.c_fc.bias');
-        add(b0.mlp.projLayer.bias, 'd_transformer.h.0.mlp.c_proj.bias');
-        add(b0.attn.proj.weight, 'd_transformer.h.0.attn.c_proj.weight');
-        add(b0.mlp.fcLayer.weight, 'd_transformer.h.0.mlp.c_fc.weight');
-        add(b0.mlp.projLayer.weight, 'd_transformer.h.0.mlp.c_proj.weight');
-    }
-
-    // --- 後續的 transformer block：只有輸出與權重有梯度，中間量沒有捕捉 ---
-    // （gen_grad_data.py 只對 block 0 逐層 retain_grad，詳解章節也都在那一層）
-    for (let i = 1; i < model.blocks.length; i++) {
+    // --- 每一個 transformer block：中間量與權重的梯度 ---
+    // gen_grad_data.py 現在對所有層都 retain_grad。第 0 層沿用無前綴的張量名，
+    // 其餘各層是 b1. / b2. 前綴（詳解章節都在第 0 層，所以它保留原名）。
+    for (let i = 0; i < model.blocks.length; i++) {
         let b = model.blocks[i];
         if (!b) continue;
-        add(b.mlp.addLayer.output, `d_block${i}`);
+        let p = i === 0 ? 'd_' : `d_b${i}.`;
+
+        // 中間量
+        add(b.ln_1.output, `${p}ln1`);
+        add(b.attn.qkvOutput, `${p}qkv`);
+        add(b.attn.attnMatrix, `${p}att`);
+        add(b.attn.attnMatrixSoftmax, `${p}attSm`);
+        add(b.attn.scaledVectors, `${p}y`);
+        add(b.attn.proj.output, `${p}yProj`);
+        add(b.attn.add.output, `${p}attnResid`);
+        add(b.ln_2.output, `${p}ln2`);
+        add(b.mlp.fcLayer.output, `${p}fc`);
+        add(b.mlp.mlpGelu, `${p}gelu`);
+        add(b.mlp.projLayer.output, `${p}mlp`);
+        add(b.mlp.addLayer.output, `${p}mlpResid`);
+
+        // 權重
         add(b.attn.qkvWeight, `d_transformer.h.${i}.attn.c_attn.weight`);
         add(b.attn.qkvBias, `d_transformer.h.${i}.attn.c_attn.bias`);
         add(b.attn.proj.weight, `d_transformer.h.${i}.attn.c_proj.weight`);
