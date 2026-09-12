@@ -371,7 +371,10 @@ export function drawRoundedRect(state: IRenderState, tl: Vec3, br: Vec3, color: 
 export function drawMaths(args: IDataFlowArgs, bottomMiddle: Vec3, textBlk: ITextBlock, pad?: number[] | number) {
     let { state, mtx } = args;
 
-    let value = getBlockValueAtIdx(args.blk, args.destIdx);
+    // 同上：反向檢視下沒有梯度資料的區塊，讀出來的會是前向啟用值，不能顯示
+    let value = (state.showGrads && args.blk.gradMissing)
+        ? null
+        : getBlockValueAtIdx(args.blk, args.destIdx);
 
     if (textBlk.type === TextBlockType.Line) {
         textBlk.subs!.push(

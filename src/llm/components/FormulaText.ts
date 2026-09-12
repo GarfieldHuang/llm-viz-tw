@@ -119,7 +119,11 @@ function op(blk: IBlkDef, detail: string, grad: boolean): IFormulaOperand {
 
 export function describeFormula(state: IProgramState, blk: IBlkDef, idx: Vec3): IFormulaDesc | null {
     let grad = state.showGrads;
-    let value = getBlockValueAtIdx(blk, idx);
+
+    // 沒有梯度資料時絕對不能顯示數值：access.src 仍指向前向貼圖，
+    // 而讀值是直接讀 localBuffer、繞過 disable 的 —— 印出來的會是前向啟用值，
+    // 卻擺在「這是梯度」的版面裡。
+    let value = (grad && blk.gradMissing) ? null : getBlockValueAtIdx(blk, idx);
 
     let base = {
         dir: (grad ? 'backward' : 'forward') as IFormulaDesc['dir'],
@@ -405,14 +409,22 @@ function describeBackwardOne(
 
     if (c.kind === 'dot') {
         let sp = dotBackSpans(blk, idx, c, other);
+
+        let notes: string[] = [];
+        if (sp.sumLabel) {
+            notes.push(`dot 就是沿 ${sp.sumLabel} 逐項相乘再加總。`);
+            if (sp.fwdLabel && sp.fwdLabel !== sp.sumLabel) {
+                notes.push(`注意加總軸翻面了：前向沿 ${sp.fwdLabel} 收縮，反向沿 ${sp.sumLabel} 收縮。`);
+            }
+        }
+        if (blk.t === 'w') {
+            notes.push('同一個權重被每個位置共用，所以每個位置的責任都要算進來。');
+        }
+
         return {
-            expr: sp.sumLabel
-                ? `沿 ${sp.sumLabel} 加總：  ${cn}[${sp.gradSpan}] · ${on}[${sp.otherSpan}]`
-                : `dot( ${cn}[${sp.gradSpan}], ${on}[${sp.otherSpan}] )`,
+            expr: `dot( ${cn}[${sp.gradSpan}], ${on}[${sp.otherSpan}] )`,
             rule: `${self} = ${cn} · ${on}ᵀ`,
-            note: blk.t === 'w'
-                ? `權重的梯度沿著 ${sp.sumLabel || '整條序列'} 加總 —— 同一個權重被每個位置共用，所以每個位置的責任都要算進來。`
-                : undefined,
+            note: notes.join('') || undefined,
             operands: [
                 { name: cn, detail: sp.gradSpan, kind: 'grad' },
                 other ? op(other.src, sp.otherSpan, false) : null,
@@ -488,7 +500,11 @@ function dotBackSpans(blk: IBlkDef, idx: Vec3, c: IBlkConsumer, other: IBlkCellD
         otherSpan = `${label ? `${label} = ${v}` : v}, ${allSum}`;
     }
 
-    return { gradSpan, otherSpan, sumLabel };
+    let fwdLabel = blkFreeComp >= 0
+        ? dimLabel(blkFreeComp === 0 ? blk.dimX : blk.dimY)
+        : '';
+
+    return { gradSpan, otherSpan, sumLabel, fwdLabel };
 }
 
 function otherDotOperand(c: IBlkConsumer): IBlkCellDep | null {

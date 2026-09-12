@@ -36,6 +36,9 @@ export const HoverFormula: React.FC = () => {
             {desc.index && <span className={s.index}>[{desc.index}]</span>}
         </div>
 
+        {/* 講明白這一塊跟 3D 浮層是同一個式子，只是把小方塊展開成名字 */}
+        <div className={s.caption}>3D 畫面上那個式子的完整版</div>
+
         <div className={s.exprRow}>
             {!desc.plain && <span className={s.eq}>=</span>}
             <span className={clsx(s.expr, desc.plain && s.plainExpr)}>{desc.expr}</span>
@@ -51,6 +54,7 @@ export const HoverFormula: React.FC = () => {
         {desc.rule && <div className={s.rule}>{desc.rule}</div>}
 
         {desc.operands.length > 0 && <div className={s.operands}>
+            <div className={s.operandsLabel}>浮層上的小方塊，對應到：</div>
             {desc.operands.map((o, i) => <Operand key={i} op={o} />)}
         </div>}
 
