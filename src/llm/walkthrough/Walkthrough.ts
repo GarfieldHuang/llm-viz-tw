@@ -19,6 +19,7 @@ import { walkthrough06_Projection } from "./Walkthrough06_Projection";
 import { walkthrough07_Mlp } from "./Walkthrough07_Mlp";
 import { walkthrough08_Transformer } from "./Walkthrough08_Transformer";
 import { walkthrough09_Output } from "./Walkthrough09_Output";
+import { walkthrough14_BackAttention } from "./Walkthrough14_BackAttention";
 
 
 /**
@@ -222,6 +223,8 @@ export function runWalkthrough(state: IProgramState, view: IRenderView) {
         walkthrough07_Mlp(wtArgs);
         walkthrough08_Transformer(wtArgs);
         walkthrough09_Output(wtArgs);
+    } else if (groupId === PhaseGroup.Backward) {
+        walkthrough14_BackAttention(wtArgs);
     }
 
     wt.prevPhase = wt.phase;
