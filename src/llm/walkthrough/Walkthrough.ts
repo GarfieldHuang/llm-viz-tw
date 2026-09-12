@@ -103,6 +103,18 @@ export function initWalkthrough() {
                 { id: Phase.Input_Detail_Softmax, title: '歸一化指數函式(Softmax)' },
                 { id: Phase.Input_Detail_Output, title: '輸出(Output)' },
             ],
+        }, {
+            groupId: PhaseGroup.Backward,
+            title: '反向傳播',
+            phases: [
+                { id: Phase.Backward_Loss, title: '損失與 dLogits' },
+                { id: Phase.Backward_Mlp, title: 'MLP 與 GELU' },
+                { id: Phase.Backward_Residual, title: '殘差分流' },
+                { id: Phase.Backward_Projection, title: '投射(Projection)' },
+                { id: Phase.Backward_Attention, title: '自注意力(Self Attention)' },
+                { id: Phase.Backward_LayerNorm, title: '層歸一化(Layer Norm)' },
+                { id: Phase.Backward_Embedding, title: '嵌入(Embedding)' },
+            ],
         }] as IPhaseGroup[],
     };
 }
@@ -115,6 +127,7 @@ interface ICameraData {
 export enum PhaseGroup {
     Intro,
     Detailed_Input,
+    Backward,
 }
 
 export enum Phase {
@@ -134,6 +147,30 @@ export enum Phase {
     Input_Detail_Mlp,
     Input_Detail_Transformer,
     Input_Detail_Output,
+
+    // --- 反向傳播（新增，與前向章節完全獨立）---
+    Backward_Loss,
+    Backward_Mlp,
+    Backward_Residual,
+    Backward_Projection,
+    Backward_Attention,
+    Backward_LayerNorm,
+    Backward_Embedding,
+}
+
+/** 這些章節顯示梯度而非啟用值。由 Program.ts 每幀據此決定是否切換取值來源。 */
+const backwardPhases = new Set<Phase>([
+    Phase.Backward_Loss,
+    Phase.Backward_Mlp,
+    Phase.Backward_Residual,
+    Phase.Backward_Projection,
+    Phase.Backward_Attention,
+    Phase.Backward_LayerNorm,
+    Phase.Backward_Embedding,
+]);
+
+export function isBackwardPhase(phase: Phase): boolean {
+    return backwardPhases.has(phase);
 }
 
 export function phaseToGroup(wt: IWalkthrough) {

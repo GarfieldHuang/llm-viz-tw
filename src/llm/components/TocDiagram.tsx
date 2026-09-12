@@ -142,6 +142,16 @@ export const TocDiagram: React.FC<{
     makeEntry(Phase.Input_Detail_Softmax, 'Softmax', ['softmaxOut']);
     makeEntry(Phase.Input_Detail_Output, 'Output', ['lnf', 'linear', 'softmaxOut'], true);
 
+    // 反向傳播：沿用同一張架構圖，但章節順序由輸出往輸入走。
+    entryGroups.push({ groupName: '反向傳播', entries: [] });
+    makeEntry(Phase.Backward_Loss, '損失與 dLogits', ['linear', 'softmaxOut'], true);
+    makeEntry(Phase.Backward_Mlp, 'MLP 與 GELU', ['feedForward']);
+    makeEntry(Phase.Backward_Residual, '殘差分流', ['transformer']);
+    makeEntry(Phase.Backward_Projection, 'Projection', ['selfAttend']);
+    makeEntry(Phase.Backward_Attention, 'Self Attention', ['selfAttend']);
+    makeEntry(Phase.Backward_LayerNorm, 'Layer Norm', ['ln1', 'ln2', 'lnf']);
+    makeEntry(Phase.Backward_Embedding, 'Embedding', ['tokEmbed', 'posEmbed'], true);
+
     function calcSizes(el: IEl): void {
         el.padX = el.padX ?? 0;
         el.padY = el.padY ?? 0;

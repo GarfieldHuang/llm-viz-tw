@@ -11,7 +11,7 @@ import { beginQueryAndGetPrevMs, endQuery } from "./render/queryManager";
 import { SavedState } from "./SavedState";
 import { isNotNil } from "@/src/utils/data";
 import { Vec3, Vec4 } from "@/src/utils/vector";
-import { initWalkthrough, runWalkthrough } from "./walkthrough/Walkthrough";
+import { initWalkthrough, isBackwardPhase, runWalkthrough } from "./walkthrough/Walkthrough";
 import { IColorMix } from "./Annotations";
 import { Mat4f } from "@/src/utils/matrix";
 import { runMouseHitTesting } from "./Interaction";
@@ -254,7 +254,9 @@ export function runProgram(view: IRenderView, state: IProgramState) {
     state.layout = genGptModelLayout(state.shape, state.jsGptModel);
 
     // 反向章節：把 block 的取值來源換成梯度貼圖。
-    // layout 每幀重建，所以這個換置是暫時的，前向章節不會被影響。
+    // 由當前 phase 直接推導，離開反向章節會自動復原；
+    // 又因 layout 每幀重建，前向章節不可能被影響。
+    state.showGrads = isBackwardPhase(state.walkthrough.phase);
     if (state.showGrads) {
         applyGradView(state.layout, state.gradData);
     }
