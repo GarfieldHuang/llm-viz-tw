@@ -759,10 +759,11 @@ function drawCellIndexAndValue(args: IDataFlowArgs, bb: BoundingBox3d): Bounding
     let textBlock = mkTextBlock({
         opts: fontOpts,
         subs: [
+            // 畫面順序 (列, 行)：列看直軸、行看橫軸，與側邊欄面板一致
             gradLabel,
-            xDim,
-            xDim && yDim && { text: ', ' },
             yDim,
+            xDim && yDim && { text: ', ' },
+            xDim,
         ],
     });
 

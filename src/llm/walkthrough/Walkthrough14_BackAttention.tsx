@@ -68,8 +68,8 @@ dS = P ⊙ ( dP − rowsum(P ⊙ dP) )
 
 dQ = dS K / √A　　dK = dSᵀ Q / √A
 
-注意一件事：因為損失只看第 5 個位置，${c_blockRef('Q', head2.qBlock)} 只有**第 5 列**有梯度，
-但 ${c_blockRef('K', head2.kBlock)} 和 ${c_blockRef('V', head2.vBlock)} 有**前六列**都有梯度。
+注意一件事：因為損失只看第 5 個位置，${c_blockRef('Q', head2.qBlock)} 只有**第 5 行**有梯度，
+但 ${c_blockRef('K', head2.kBlock)} 和 ${c_blockRef('V', head2.vBlock)} 有**前六行**都有梯度。
 
 這個不對稱不是巧合：第 5 個位置只用了它自己的 query，卻去看了位置 0 到 5 的所有 key 和 value。
 因果錐在梯度上直接看得見。`;

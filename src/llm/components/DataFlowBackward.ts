@@ -30,6 +30,7 @@ import { addLine2, drawLineSegs, makeLineOpts } from "../render/lineRender";
 import { Colors, DimStyle, dimStyleTextShort } from "../walkthrough/WalkthroughTools";
 import { isNotNil } from "@/src/utils/data";
 import { BoundingBox3d, Dim, Vec3, Vec4 } from "@/src/utils/vector";
+import { Mat4f } from "@/src/utils/matrix";
 
 // ---------------------------------------------------------------------------
 // 依賴圖反轉
@@ -368,7 +369,7 @@ function drawSoftmaxBackward(args: IDataFlowArgs): BoundingBox3d {
     }));
 }
 
-/** dx = (γ / σ) ‧ ( d — E[d] — xn ‧ E[d ‧ xn] )，同樣整列綁在一起。 */
+/** dx = (γ / σ) ‧ ( d — E[d] — xn ‧ E[d ‧ xn] )，同樣整行綁在一起。 */
 function drawLayerNormBackward(args: IDataFlowArgs): BoundingBox3d {
     let opts = fontOptsOf(args);
 
@@ -417,43 +418,91 @@ function drawMatmulBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d
 }
 
 /**
- * 矩陣乘法反向的矩陣形式，轉置放在推導出來的那一邊。
+ * 矩陣乘法反向的矩陣形式，**一律用畫面上看到的形狀**。
  *
- * 不能用寫死的樣板 —— 轉置該加在哪一邊，取決於「收縮軸落在各張量的第幾個軸」，
- * 而那會隨 blk 是被乘的哪一邊而變。原本寫成 dLogits ‧ LN^T 就是把 ^T 加錯邊，
- * 維度根本不合；正解是 dLogits^T ‧ LN（(n_vocab, t) @ (t, C)）。
+ * 畫面上每個區塊就是一個矩陣，寫成 (列數, 行數)：
+ * 列是橫的，列數＝直軸 dimY 的格數；行是直的，行數＝橫軸 dimX 的格數。
+ * 例如 Layer Norm 畫成 (C, t)、Logits 畫成 (n_vocab, t)、
+ * LM Head Weights 畫成 (n_vocab, C)。
  *
- * 規則：矩陣連乘要求收縮軸是左邊的第二軸、右邊的第一軸。
- * 不符合就補一個轉置。結果的軸序若與 blk 的擺放相反，結果本身也要標轉置。
+ * 用這組座標，前向是 Logits = Wlm @ LN，反向就是教科書那兩條：
+ *     dL = dS @ R^T      dR = L^T @ dS
+ * dWlm = dLogits @ LN^T，也就是 (n_vocab, t) @ (t, C) -> (n_vocab, C)。
+ *
+ * 唯一要小心的是：運算元在消費者那個乘法裡本身可能已經是轉置的
+ * （注意力的 S = Q^T @ K 就是），所以要先判斷它是以哪個姿態入場。
  */
-export function matmulMatrixForm(c: IBlkConsumer, blk: IBlkDef, other: IBlkCellDep | null): string {
-    let self = gradName(blk.name);
+export function matmulMatrixForm(c: IBlkConsumer, blk: IBlkDef, other: IBlkCellDep | null, withShapes = false): string {
     if (!other) {
         return '';
     }
 
-    let free = freeDestDim(c.dep);
-    if (free === null) {
-        return '';
+    // 這個運算元的「第幾列」與「第幾行」分別由什麼決定：'i'(收縮軸)、'Sy'、'Sx'
+    function roles(m: Mat4f) {
+        let src = (k: number) => m.g(k, 3) === 1 ? 'i'
+            : m.g(k, 1) === 1 ? 'Sy'
+            : m.g(k, 0) === 1 ? 'Sx' : '?';
+        return { row: src(1), col: src(0) };   // 第幾列看直軸 y、第幾行看橫軸 x
     }
 
-    // 收縮軸在梯度張量（消費者）的第幾軸：x -> 需要轉置才能當左邊的第二軸
-    let leftT = free === Dim.X;
-    // 收縮軸在另一個運算元的第幾軸：y -> 需要轉置才能當右邊的第一軸
-    let rightT = otherSweepIsX(c, other) === false;
+    let blkRoles = roles(c.dep.srcIdxMtx);
+    let otherRoles = roles(other.srcIdxMtx);
 
-    // blk 的哪個分量綁到消費者的非收縮軸；綁在 y 代表結果的軸序與 blk 相反
-    let boundComp = -1;
-    for (let k = 0; k < 3 && boundComp < 0; k++) {
-        for (let d = 0; d < 3; d++) {
-            if (c.dep.srcIdxMtx.g(k, d) === 1) { boundComp = k; break; }
+    // 左因子要長成 (Sy, i)，右因子要長成 (i, Sx)
+    let isLeft = (r: { row: string, col: string }) => r.row === 'Sy' || r.col === 'Sy';
+    let leftNeedsT = (r: { row: string, col: string }) => r.row === 'i';
+    let rightNeedsT = (r: { row: string, col: string }) => r.col === 'i';
+
+    let selfName_ = gradName(blk.name);
+    let dS = gradName(c.consumer.name);
+    let on = shortName(other.src.name);
+
+    let T = (n: string, need: boolean) => n + (need ? '^T' : '');
+
+    let expr: string;
+    let shapes: [IBlkDef, boolean][];   // [區塊, 是否轉置]，依出現順序
+
+    if (isLeft(blkRoles)) {
+        // blk 是左因子。dL = dS @ R^T
+        let rT = rightNeedsT(otherRoles);
+        if (!leftNeedsT(blkRoles)) {
+            expr = `${selfName_} = ${dS} ‧ ${T(on, !rT)}`;
+            shapes = [[c.consumer, false], [other.src, !rT], [blk, false]];
+        } else {
+            // L = blk^T，兩邊同時轉置：dblk = R @ dS^T
+            expr = `${selfName_} = ${T(on, rT)} ‧ ${dS}^T`;
+            shapes = [[other.src, rT], [c.consumer, true], [blk, false]];
+        }
+    } else {
+        // blk 是右因子。dR = L^T @ dS
+        let lT = leftNeedsT(otherRoles);
+        if (!rightNeedsT(blkRoles)) {
+            expr = `${selfName_} = ${T(on, !lT)} ‧ ${dS}`;
+            shapes = [[other.src, !lT], [c.consumer, false], [blk, false]];
+        } else {
+            expr = `${selfName_} = ${dS}^T ‧ ${T(on, lT)}`;
+            shapes = [[c.consumer, true], [other.src, lT], [blk, false]];
         }
     }
-    let resultT = boundComp === 1;
 
-    let t = (name: string, need: boolean) => name + (need ? '^T' : '');
-    return t(self, resultT) + ' = '
-        + t(gradName(c.consumer.name), leftT) + ' ‧ ' + t(shortName(other.src.name), rightT);
+    if (!withShapes) {
+        return expr;
+    }
+
+    // 畫面上的形狀：(列數, 行數) = (dimY, dimX)，轉置就對調
+    let shape = (b: IBlkDef, transposed: boolean) => {
+        let rows = dimLabelOf(b.dimY);
+        let cols = dimLabelOf(b.dimX);
+        return transposed ? `(${cols}, ${rows})` : `(${rows}, ${cols})`;
+    };
+
+    return expr + '   '
+        + shape(shapes[0][0], shapes[0][1]) + ' @ ' + shape(shapes[1][0], shapes[1][1])
+        + ' -> ' + shape(shapes[2][0], shapes[2][1]);
+}
+
+function dimLabelOf(style: DimStyle) {
+    return style === DimStyle.None ? '?' : dimStyleTextShort(style);
 }
 
 /** 反向要沿著消費者的哪一軸加總（＝沒有被 blk 決定的那一維）。 */
@@ -511,7 +560,7 @@ function drawAddBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
     }));
 }
 
-/** 嵌入表：梯度是 scatter-add，只有被查到的那一列會拿到東西。 */
+/** 嵌入表：梯度是 scatter-add，只有被查到的那一行會拿到東西。 */
 function drawEmbedScatter(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
     let opts = fontOptsOf(args);
 

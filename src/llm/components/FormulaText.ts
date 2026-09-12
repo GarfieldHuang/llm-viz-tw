@@ -2,7 +2,7 @@
  * 把滑鼠指到的那一格的算式，寫成側邊欄看得懂的完整文字。
  *
  * 3D 畫面上的浮層受限於字型圖集（只有 ASCII 加 Σ γ β σ μ ε ‧ —），而且用
- * 小方塊代表「某一列／某一行」，看得到形狀卻看不到是誰。例如權重梯度會畫成
+ * 小方塊代表「橫的一列／直的一行」，看得到形狀卻看不到是誰。例如權重梯度會畫成
  *
  *     dWlm = dot( ▭▭, ▭▭ )  dLogits ‧ LN^T = -1.11
  *
@@ -58,11 +58,13 @@ function dimLabel(style: DimStyle) {
 }
 
 function indexText(blk: IBlkDef, idx: Vec3) {
+    // 一律寫成畫面順序 (列, 行)：列看直軸 dimY、行看橫軸 dimX。
+    // 與矩陣形式、與 3D 浮層的座標標籤都用同一個順序，才不會兩邊對不起來。
     let parts: string[] = [];
-    let x = dimLabel(blk.dimX);
     let y = dimLabel(blk.dimY);
-    if (x) parts.push(`${x} = ${idx.x}`);
+    let x = dimLabel(blk.dimX);
     if (y) parts.push(`${y} = ${idx.y}`);
+    if (x) parts.push(`${x} = ${idx.x}`);
     return parts.join(', ');
 }
 
@@ -82,9 +84,11 @@ function depSpan(dep: IBlkCellDep, destIdx: Vec3, blk: IBlkDef): string {
     let mtx = dep.srcIdxMtx;
     let hasDot = mtx.g(0, 3) === 1 || mtx.g(1, 3) === 1 || mtx.g(2, 3) === 1;
 
-    // 找出每個 src 分量是由 dest 的哪一維決定的
+    // 找出每個 src 分量是由 dest 的哪一維決定的。
+    // k 是 src 的分量（0=橫軸 x、1=直軸 y），照畫面順序輸出要先列(y)後行(x)，
+    // 所以由 k=1 往 k=0 掃。
     let fixed: string[] = [];
-    for (let k = 0; k < 3; k++) {
+    for (let k = 2; k >= 0; k--) {
         for (let d = 0; d < 3; d++) {
             if (mtx.g(k, d) === 1) {
                 let style = d === 0 ? blk.dimX : d === 1 ? blk.dimY : DimStyle.None;
@@ -113,9 +117,9 @@ function op(blk: IBlkDef, detail: string, grad: boolean): IFormulaOperand {
     return { name: nameOf(blk, grad), detail, kind: kindOf(blk, grad) };
 }
 
-/** 這個區塊自己的兩個軸名，例如 'c, n_vocab'。 */
+/** 這個區塊自己的軸名，畫面順序 (列, 行)，例如 'n_vocab, c'。 */
 function axisNames(blk: IBlkDef) {
-    return [dimLabel(blk.dimX), dimLabel(blk.dimY)].filter(a => a).join(', ');
+    return [dimLabel(blk.dimY), dimLabel(blk.dimX)].filter(a => a).join(', ');
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +185,8 @@ function describeForward(state: IProgramState, blk: IBlkDef, idx: Vec3): Body {
             rule: 'x = Wte[token] + Wpe[t]',
             note: '查表相加，不是矩陣乘法',
             operands: [
-                op(tok, `token = ${tokenIdx ?? '?'} 那一列`, false),
-                op(pos, `t = ${idx.x} 那一列`, false),
+                op(tok, `token = ${tokenIdx ?? '?'} 那一行`, false),
+                op(pos, `t = ${idx.x} 那一行`, false),
             ],
         };
     }
@@ -193,10 +197,10 @@ function describeForward(state: IProgramState, blk: IBlkDef, idx: Vec3): Body {
         return {
             expr: `( ${src?.name ?? '輸入'}[${indexText(blk, idx)}] − μ ) / σ · γ[c = ${idx.y}] + β[c = ${idx.y}]`,
             rule: 'LN = (x − E[x]) / √(Var[x] + ε) · γ + β',
-            note: 'μ 與 σ 是整欄（所有 c）一起算的，所以同欄每一格都互相牽動',
+            note: 'μ 與 σ 是整行（所有 c）一起算的，所以同一行每一格都互相牽動',
             operands: [
                 src ? op(src, `${indexText(blk, idx)}`, false) : null,
-                { name: 'μ, σ', detail: `t = ${idx.x} 那一整欄的平均與標準差`, kind: 'agg' as OperandKind },
+                { name: 'μ, σ', detail: `t = ${idx.x} 那一整行的平均與標準差`, kind: 'agg' as OperandKind },
                 gamma ? op(gamma, `c = ${idx.y}`, false) : null,
                 beta ? op(beta, `c = ${idx.y}`, false) : null,
             ].filter(Boolean) as IFormulaOperand[],
@@ -204,15 +208,15 @@ function describeForward(state: IProgramState, blk: IBlkDef, idx: Vec3): Body {
     }
     case BlKDepSpecial.LayerNormMu:
         return {
-            expr: `E[ ${add[0]?.src.name}[t = ${idx.x}, 整欄] ]`,
+            expr: `E[ ${add[0]?.src.name}[t = ${idx.x}, 整行] ]`,
             rule: 'μ = E[x]',
-            operands: add[0] ? [op(add[0].src, `t = ${idx.x} 整欄`, false)] : [],
+            operands: add[0] ? [op(add[0].src, `t = ${idx.x} 整行`, false)] : [],
         };
     case BlKDepSpecial.LayerNormSigma:
         return {
-            expr: `√( Var[ ${add[0]?.src.name}[t = ${idx.x}, 整欄] ] + ε )`,
+            expr: `√( Var[ ${add[0]?.src.name}[t = ${idx.x}, 整行] ] + ε )`,
             rule: 'σ = √(Var[x] + ε)',
-            operands: add[0] ? [op(add[0].src, `t = ${idx.x} 整欄`, false)] : [],
+            operands: add[0] ? [op(add[0].src, `t = ${idx.x} 整行`, false)] : [],
         };
     case BlKDepSpecial.SoftmaxAggMax:
         return {
@@ -384,12 +388,12 @@ function describeBackwardOne(
         return {
             expr: `γ / σ · ( ${cn}[${indexText(blk, idx)}] − E[${cn}] − xn · E[${cn}·xn] )`,
             rule: `${self} = (γ / σ) ⊙ ( d − E[d] − xn ⊙ E[d ⊙ xn] )`,
-            note: '後兩項等於「扣掉整欄的平均責任」與「扣掉與自己方向相關的部分」——'
-                + 'Layer Norm 不准反向去調整整欄的平均與尺度，因為前向已經把它們歸一化掉了。'
+            note: '後兩項等於「扣掉整行的平均責任」與「扣掉與自己方向相關的部分」——'
+                + 'Layer Norm 不准反向去調整整行的平均與尺度，因為前向已經把它們歸一化掉了。'
                 + 'xn 是歸一化後、乘 γ 前的值。',
             operands: [
-                { name: cn, detail: '這一格，以及整欄的兩個平均', kind: 'grad' },
-                { name: 'γ, σ', detail: '縮放參數與該欄標準差', kind: 'weight' },
+                { name: cn, detail: '這一格，以及整行的兩個平均', kind: 'grad' },
+                { name: 'γ, σ', detail: '縮放參數與該行標準差', kind: 'weight' },
             ],
         };
     case BlKDepSpecial.Gelu:
@@ -405,11 +409,11 @@ function describeBackwardOne(
         };
     case BlKDepSpecial.InputEmbed:
         return {
-            expr: `${self}[被查到的那一列] += ${cn}[對應的位置]`,
+            expr: `${self}[被查到的那一行] += ${cn}[對應的位置]`,
             rule: `${self} = scatter-add(${cn})`,
-            note: '查表的反向是 scatter-add：把梯度加回被查到的那一列，沒被查到的列不動。'
-                + '同一列可能被好幾個位置加到，所以是累加而不是覆蓋。',
-            operands: [{ name: cn, detail: '用到這一列的每一個位置', kind: 'grad' }],
+            note: '查表的反向是 scatter-add：把梯度加回被查到的那一行，沒被查到的行不動。'
+                + '同一行可能被好幾個位置加到，所以是累加而不是覆蓋。',
+            operands: [{ name: cn, detail: '用到這一行的每一個位置', kind: 'grad' }],
         };
     case BlKDepSpecial.Attention:
         return {
@@ -445,7 +449,7 @@ function describeBackwardOne(
             : `${self} = ${cn} · ${on}`;
 
         // 矩陣形式的轉置位置是推導出來的，不是寫死的 —— 見 matmulMatrixForm
-        let matForm = matmulMatrixForm(c, blk, other).replace(/\^T/g, 'ᵀ');
+        let matForm = matmulMatrixForm(c, blk, other, true).replace(/\^T/g, 'ᵀ');
         let rule = matForm ? `${indexForm}
 矩陣形式： ${matForm}` : indexForm;
 

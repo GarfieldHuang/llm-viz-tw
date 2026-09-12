@@ -27,13 +27,13 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
 
     breakAfter();
     commentary(wt)`
-答案是 **scatter-add**：把梯度加回去被查到的那一列。
+答案是 **scatter-add**：把梯度加回去被查到的那一行。
 
-前向時 token "C"（索引 2）去 ${c_blockRef('詞嵌入表', layout.tokEmbedObj)} 取了第 2 列。
-反向時，這個位置的梯度就整條加回第 2 列。沒被查到的列，一個字都不會動。
+前向時 token "C"（索引 2）去 ${c_blockRef('詞嵌入表', layout.tokEmbedObj)} 取了第 2 行。
+反向時，這個位置的梯度就整條加回第 2 行。沒被查到的行，一個字都不會動。
 
 把滑鼠移到嵌入表上，浮層寫的是 **scatter-add, only rows that were looked up** ——
-而且用的是「加等於」而不是「等於」，因為同一列會被加很多次。`;
+而且用的是「加等於」而不是「等於」，因為同一行會被加很多次。`;
     breakAfter();
 
     let t_dTok = afterTime(null, 3.0);
@@ -41,10 +41,10 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
     breakAfter();
     commentary(wt)`
 看清楚這張表的形狀：詞彙表只有 ${c_dimRef('三個 token', DimStyle.n_vocab)}（A、B、C），
-但序列有六個位置。所以**同一列會被好幾個位置同時加到**。
+但序列有六個位置。所以**同一行會被好幾個位置同時加到**。
 
 這就是 scatter-add 那個 add 的來源 —— 不是覆蓋，是累加。
-如果序列裡出現了三次 "B"，那三個位置的責任全部疊在 "B" 那一列上。
+如果序列裡出現了三次 "B"，那三個位置的責任全部疊在 "B" 那一行上。
 
 這也解釋了為什麼常見的詞學得快、罕見的詞學得慢：**梯度的累積次數就是出現次數**。`;
     breakAfter();
@@ -55,10 +55,10 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
     commentary(wt)`
 ${c_blockRef('位置嵌入表', layout.posEmbedObj)} 的情況剛好相反。
 
-位置 0 只會對應到第 0 列、位置 1 只會對應第 1 列 —— 一對一，不會重複。
-所以它每一列最多只拿到一份梯度。
+位置 0 只會對應到第 0 行、位置 1 只會對應第 1 行 —— 一對一，不會重複。
+所以它每一行最多只拿到一份梯度。
 
-而且因為這個例子的損失只看位置 5，**位置 6 以後的列全是灰的**。
+而且因為這個例子的損失只看位置 5，**位置 6 以後的行全是灰的**。
 它們在這次前向裡根本沒被用到（因果遮罩擋住了），自然也沒有責任。`;
     breakAfter();
 
@@ -70,7 +70,7 @@ ${c_blockRef('位置嵌入表', layout.posEmbedObj)} 的情況剛好相反。
 
 沒有下一步了 —— 嵌入表是葉節點，它的梯度就是終點。
 從損失那三個數字 [1, 0, −1] 開始，一路分流、轉置相乘、穿過 softmax 和 GELU、
-被 Layer Norm 扣掉整欄的平均，最後散落回這兩張表上。
+被 Layer Norm 扣掉整行的平均，最後散落回這兩張表上。
 
 整趟走完，模型裡**每一個參數**都拿到了一個數字，回答同一個問題：
 「把我調高一點點，損失會變多少？」
