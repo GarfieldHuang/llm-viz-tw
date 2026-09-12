@@ -51,7 +51,9 @@ export const HoverFormula: React.FC = () => {
             </div>
         )}
 
-        {desc.rule && <div className={s.rule}>{desc.rule}</div>}
+        {desc.rule && <div className={s.rule}>
+            {desc.rule.split('\n').map((line, i) => <div key={i}>{line}</div>)}
+        </div>}
 
         {desc.operands.length > 0 && <div className={s.operands}>
             <div className={s.operandsLabel}>浮層上的小方塊，對應到：</div>

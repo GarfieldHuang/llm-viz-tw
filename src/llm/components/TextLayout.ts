@@ -60,6 +60,8 @@ export enum TextBlockType {
     Divide,
     Cells,
     Custom,
+    /** 垂直堆疊，靠左對齊。用來把補充說明放到算式的下一行。 */
+    Stack,
 }
 
 export function lineHeight(fontOpts: IFontOpts) {
@@ -178,6 +180,17 @@ export function sizeBlock(render: IRenderState, blk: ITextBlock) {
         blk.size = new Vec3(spacing.size.x + spacing.pad, spacing.size.y);
         break;
     }
+    case TextBlockType.Stack: {
+        let w = 0;
+        let h = 0;
+        for (let sub of blk.subs!) {
+            sizeBlock(render, sub);
+            w = Math.max(w, sub.size.x);
+            h += sub.size.y;
+        }
+        blk.size = new Vec3(w, h, 0);
+        break;
+    }
     case TextBlockType.Custom: {
         // already sized
         break;
@@ -221,6 +234,15 @@ export function layoutBlock(blk: ITextBlock) {
         break;
     }
     case TextBlockType.Custom: {
+        break;
+    }
+    case TextBlockType.Stack: {
+        let y = blk.offset.y;
+        for (let sub of blk.subs!) {
+            sub.offset = new Vec3(blk.offset.x, y).round_();
+            layoutBlock(sub);
+            y += sub.size.y;
+        }
         break;
     }
     default: { let _exhaustCheck: never = blk.type; }
@@ -293,6 +315,12 @@ export function drawBlock(render: IRenderState, blk: ITextBlock) {
     }
     case TextBlockType.Custom: {
         blk.draw?.(blk, render);
+        break;
+    }
+    case TextBlockType.Stack: {
+        for (let sub of blk.subs!) {
+            drawBlock(render, sub);
+        }
         break;
     }
     default: { let _exhaustCheck: never = blk.type; }

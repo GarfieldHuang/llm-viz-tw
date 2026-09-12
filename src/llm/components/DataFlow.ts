@@ -376,13 +376,18 @@ export function drawMaths(args: IDataFlowArgs, bottomMiddle: Vec3, textBlk: ITex
         ? null
         : getBlockValueAtIdx(args.blk, args.destIdx);
 
-    if (textBlk.type === TextBlockType.Line) {
-        textBlk.subs!.push(
-            mkTextBlock({ text: '  =  ', opts: textBlk.opts }),
+    // 等號接在算式那一行的尾巴。若是多行堆疊，接在第一行（算式）而不是最後一行（補充說明）。
+    let valueLine = textBlk.type === TextBlockType.Line ? textBlk
+        : textBlk.type === TextBlockType.Stack && textBlk.subs?.[0]?.type === TextBlockType.Line ? textBlk.subs[0]
+        : null;
+
+    if (valueLine) {
+        valueLine.subs!.push(
+            mkTextBlock({ text: '  =  ', opts: valueLine.opts }),
         );
         if (isNotNil(value)) {
-            textBlk.subs!.push(
-                mkTextBlock({ text: value.toFixed(2), opts: textBlk.opts, size: new Vec3(35, 0), align: TextAlignHoriz.Right }),
+            valueLine.subs!.push(
+                mkTextBlock({ text: value.toFixed(2), opts: valueLine.opts, size: new Vec3(35, 0), align: TextAlignHoriz.Right }),
             );
         }
     }

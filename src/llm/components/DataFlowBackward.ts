@@ -182,6 +182,53 @@ function selfName(args: IDataFlowArgs) {
     return gradName(args.blk.name);
 }
 
+/**
+ * 反向時，某個運算元在畫面上被掃過的是「橫的一列」還是「直的一行」。
+ *
+ * 不能寫死。前向與反向的收縮軸不同（例如 LN：前向沿 C 掃是直的，
+ * 反向沿 T 掃就變成橫的），寫死一定會有一邊畫錯。
+ */
+function sliceShape(alongX: boolean | null): { cellX: number, cellY: number } {
+    if (alongX === null) {
+        return { cellX: 1, cellY: 1 };
+    }
+    return alongX ? { cellX: 4, cellY: 1 } : { cellX: 1, cellY: 4 };
+}
+
+/** 消費者那一側被掃過的軸：沒有被 blk 決定的那一維。 */
+function consumerSweepIsX(c: IBlkConsumer): boolean | null {
+    let d = freeDestDim(c.dep);
+    return d === null ? null : d === Dim.X;
+}
+
+/** 點積另一邊被掃過的軸：它身上對應到「消費者自由軸」的那個分量。 */
+function otherSweepIsX(c: IBlkConsumer, other: IBlkCellDep | null): boolean | null {
+    let free = freeDestDim(c.dep);
+    if (!other || free === null) {
+        return null;
+    }
+    let d = free === Dim.X ? 0 : 1;
+    let m = other.srcIdxMtx;
+    if (m.g(0, d) === 1) return true;    // 掃過 other 的 x
+    if (m.g(1, d) === 1) return false;   // 掃過 other 的 y
+    return null;
+}
+
+/** 算式一行 + 補充說明一行。說明擠在同一行太容易被誤讀成算式的一部分。 */
+function twoLines(args: IDataFlowArgs, formula: ITextBlockArgs[], hint: string) {
+    let opts = fontOptsOf(args);
+    return drawMaths(args, args.center, mkTextBlock({
+        opts,
+        type: TextBlockType.Stack,
+        subs: [
+            { type: TextBlockType.Line, subs: formula },
+            { type: TextBlockType.Line, subs: [
+                { text: hint, opts: { ...opts, size: opts.size * 0.8 }, color: new Vec4(0.62, 0.62, 0.62, 1) },
+            ] },
+        ],
+    }));
+}
+
 function note(args: IDataFlowArgs, text: string) {
     return drawMaths(args, args.center, mkTextBlock({
         opts: { ...fontOptsOf(args), size: 14 },
@@ -295,6 +342,9 @@ function drawFanInSum(args: IDataFlowArgs, consumers: IBlkConsumer[]): BoundingB
 function drawSoftmaxBackward(args: IDataFlowArgs): BoundingBox3d {
     let opts = fontOptsOf(args);
 
+    // softmax 是逐列做的（沿 x），所以那個 Σ 掃的是橫的一整列
+    let rowShape = sliceShape(true);
+
     return drawMaths(args, args.center, mkTextBlock({
         opts,
         subs: [
@@ -308,9 +358,9 @@ function drawSoftmaxBackward(args: IDataFlowArgs): BoundingBox3d {
                 rectOpts: makeLineOpts({ color: Colors.Aggregates.mul(0.8), mtx: args.mtx, thick: 1.0, dash: 6 }),
                 subs: [
                     { text: 'Σ', opts: { ...opts, size: opts.size * 1.5 } },
-                    { cellX: 4, cellY: 1, color: workingSrcColor },
+                    { ...rowShape, color: workingSrcColor },
                     { text: ' ‧ ' },
-                    { cellX: 4, cellY: 1, color: gradColor },
+                    { ...rowShape, color: gradColor },
                 ],
             },
             { text: ' )' },
@@ -351,30 +401,59 @@ function drawMatmulBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d
     let other = otherDotOperand(c);
     let otherColor = other && other.src.t === 'w' ? weightSrcColor : workingSrcColor;
 
-    return drawMaths(args, args.center, mkTextBlock({
-        opts,
-        subs: [
-            { text: selfName(args) + ' = dot( ', color: gradColor },
-            { cellX: 4, cellY: 1, color: gradColor },
-            { text: ', ' },
-            { cellX: 4, cellY: 1, color: otherColor },
-            { text: ' )   ' },
-            { text: matmulHint(c, other), color: new Vec4(0.7, 0.7, 0.7, 1) },
-        ],
-    }));
+    // 方塊的長寬要跟畫面上實際被掃過的方向一致（橫的一列 / 直的一行），
+    // 這與式子裡的轉置是兩回事，不能互相套用。
+    let gradShape = sliceShape(consumerSweepIsX(c));
+    let otherShape = sliceShape(otherSweepIsX(c, other));
+    let sum = sumAxisLabel(c);
+
+    return twoLines(args, [
+        { text: selfName(args) + ' = dot( ', color: gradColor },
+        { ...gradShape, color: gradColor },
+        { text: ', ' },
+        { ...otherShape, color: otherColor },
+        { text: ' )' },
+    ], (sum ? `Σ ${sum}   ` : '') + matmulMatrixForm(c, args.blk, other));
 }
 
 /**
- * 矩陣乘法反向的提示文字。
+ * 矩陣乘法反向的矩陣形式，轉置放在推導出來的那一邊。
  *
- * 不要寫成 `A ‧ B^T` —— 轉置的方向會隨 blk 是被乘的哪一邊而變，
- * 寫死樣板一定會在某一邊標錯（dWlm 實際上是 LNf^T ‧ dLogits，不是 dLogits ‧ LNf^T）。
- * 改講「沿哪一軸加總」，那個永遠是對的。
+ * 不能用寫死的樣板 —— 轉置該加在哪一邊，取決於「收縮軸落在各張量的第幾個軸」，
+ * 而那會隨 blk 是被乘的哪一邊而變。原本寫成 dLogits ‧ LN^T 就是把 ^T 加錯邊，
+ * 維度根本不合；正解是 dLogits^T ‧ LN（(n_vocab, t) @ (t, C)）。
+ *
+ * 規則：矩陣連乘要求收縮軸是左邊的第二軸、右邊的第一軸。
+ * 不符合就補一個轉置。結果的軸序若與 blk 的擺放相反，結果本身也要標轉置。
  */
-function matmulHint(c: IBlkConsumer, other: IBlkCellDep | null): string {
-    let sum = sumAxisLabel(c);
-    let names = gradName(c.consumer.name) + ' ‧ ' + (other ? shortName(other.src.name) : '?');
-    return sum ? `Σ ${sum}: ${names}` : names;
+export function matmulMatrixForm(c: IBlkConsumer, blk: IBlkDef, other: IBlkCellDep | null): string {
+    let self = gradName(blk.name);
+    if (!other) {
+        return '';
+    }
+
+    let free = freeDestDim(c.dep);
+    if (free === null) {
+        return '';
+    }
+
+    // 收縮軸在梯度張量（消費者）的第幾軸：x -> 需要轉置才能當左邊的第二軸
+    let leftT = free === Dim.X;
+    // 收縮軸在另一個運算元的第幾軸：y -> 需要轉置才能當右邊的第一軸
+    let rightT = otherSweepIsX(c, other) === false;
+
+    // blk 的哪個分量綁到消費者的非收縮軸；綁在 y 代表結果的軸序與 blk 相反
+    let boundComp = -1;
+    for (let k = 0; k < 3 && boundComp < 0; k++) {
+        for (let d = 0; d < 3; d++) {
+            if (c.dep.srcIdxMtx.g(k, d) === 1) { boundComp = k; break; }
+        }
+    }
+    let resultT = boundComp === 1;
+
+    let t = (name: string, need: boolean) => name + (need ? '^T' : '');
+    return t(self, resultT) + ' = '
+        + t(gradName(c.consumer.name), leftT) + ' ‧ ' + t(shortName(other.src.name), rightT);
 }
 
 /** 反向要沿著消費者的哪一軸加總（＝沒有被 blk 決定的那一維）。 */
@@ -392,27 +471,26 @@ function drawAttentionBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBo
     let opts = fontOptsOf(args);
     let other = otherDotOperand(c);
 
-    return drawMaths(args, args.center, mkTextBlock({
-        opts,
-        subs: [
-            { text: selfName(args) + ' = ', color: gradColor },
-            {
-                type: TextBlockType.Divide,
-                subs: [
-                    { subs: [
-                        { text: 'dot( ' },
-                        { cellX: 4, cellY: 1, color: gradColor },
-                        { text: ', ' },
-                        { cellX: 4, cellY: 1, color: workingSrcColor },
-                        { text: ' )' },
-                    ] },
-                    { subs: [{ type: TextBlockType.Sqrt, subs: [{ text: 'A' }] }] },
-                ],
-            },
-            { text: '   ' + gradName(c.consumer.name) + ' ‧ ' + (other ? shortName(other.src.name) : '?'),
-              color: new Vec4(0.7, 0.7, 0.7, 1) },
-        ],
-    }));
+    let gradShape = sliceShape(consumerSweepIsX(c));
+    let otherShape = sliceShape(otherSweepIsX(c, other));
+    let sum = sumAxisLabel(c);
+
+    return twoLines(args, [
+        { text: selfName(args) + ' = ', color: gradColor },
+        {
+            type: TextBlockType.Divide,
+            subs: [
+                { subs: [
+                    { text: 'dot( ' },
+                    { ...gradShape, color: gradColor },
+                    { text: ', ' },
+                    { ...otherShape, color: workingSrcColor },
+                    { text: ' )' },
+                ] },
+                { subs: [{ type: TextBlockType.Sqrt, subs: [{ text: 'A' }] }] },
+            ],
+        },
+    ], (sum ? `Σ ${sum}   ` : '') + matmulMatrixForm(c, args.blk, other) + ' / √A');
 }
 
 /** 殘差／偏置這類純加法：梯度原封不動地傳過去，一個字都不改。 */
@@ -521,17 +599,12 @@ function drawGeluBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
 export function drawBackwardDependences(state: IProgramState, blk: IBlkDef, idx: Vec3) {
     let layout = state.layout;
 
-    // 與箭頭共用同一份清單，兩者不可能再各說各話
+    // 與箭頭共用同一份清單，兩者不可能再各說各話。
+    // sweepIsX 也直接沿用，所以「公式框裡畫橫的、畫面上就亮橫的一列」。
     for (let target of getBackwardArrowTargets(state, blk, idx)) {
-        let isConsumer = target.color === gradColor;
-        let dep = isConsumer
-            ? getRealConsumers(state, blk).find(c => c.consumer === target.blk)?.dep
-            : undefined;
-        let freeDim = dep ? freeDestDim(dep) : null;
-
-        if (freeDim !== null) {
-            // 這一格的梯度是沿著整條累加來的，把那一條都點亮
-            let acrossDim = freeDim === Dim.X ? Dim.Y : Dim.X;
+        if (target.sweepIsX !== null) {
+            // 沿著整條累加來的，把那一整條都點亮（橫掃就切 Y、直掃就切 X）
+            let acrossDim = target.sweepIsX ? Dim.Y : Dim.X;
             let sub = splitGridForHighlight(layout, target.blk, acrossDim, target.idx.getAt(acrossDim));
             if (sub) {
                 sub.highlight = 0.5;
@@ -575,13 +648,15 @@ function freeDestDim(dep: IBlkCellDep): Dim | null {
  * 顏色與公式框裡的方塊一致：梯度橘、權重藍、中間值綠。
  */
 export function getBackwardArrowTargets(state: IProgramState, blk: IBlkDef, destIdx: Vec3) {
-    let out: { blk: IBlkDef, idx: Vec3, color: Vec4 }[] = [];
+    // sweepIsX：這個運算元在畫面上被掃過的是橫的一列(true)、直的一行(false)，還是單一格(null)。
+    // 高亮與公式框裡方塊的長寬都靠它，兩者才不會一個畫橫的一個畫直的。
+    let out: { blk: IBlkDef, idx: Vec3, color: Vec4, sweepIsX: boolean | null }[] = [];
 
-    let push = (target: IBlkDef, idx: Vec3, color: Vec4) => {
+    let push = (target: IBlkDef, idx: Vec3, color: Vec4, sweepIsX: boolean | null = null) => {
         if (target.opacity === 0) {
             return;
         }
-        out.push({ blk: target, idx, color });
+        out.push({ blk: target, idx, color, sweepIsX });
     };
 
     let fwdColor = (b: IBlkDef) =>
@@ -602,14 +677,15 @@ export function getBackwardArrowTargets(state: IProgramState, blk: IBlkDef, dest
         let consumerIdx = destIdxFromSrc(c.dep, destIdx, c.consumer);
 
         // 一定有的那一條：把梯度交給我的人
-        push(c.consumer, consumerIdx, gradColor);
+        push(c.consumer, consumerIdx, gradColor, consumerSweepIsX(c));
 
         // 點積的另一邊：它在公式裡，但不是消費者，所以要另外補
         if (c.kind === 'dot') {
             let other = otherDotOperand(c);
             if (other) {
                 let contraction = blkContractionValue(blk, destIdx, c);
-                push(other.src, otherOperandIdx(other, consumerIdx, contraction), fwdColor(other.src));
+                push(other.src, otherOperandIdx(other, consumerIdx, contraction),
+                    fwdColor(other.src), otherSweepIsX(c, other));
             }
         }
 

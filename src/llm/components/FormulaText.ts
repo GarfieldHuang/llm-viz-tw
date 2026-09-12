@@ -16,7 +16,7 @@
 import { BlKDepSpecial, IBlkCellDep, IBlkDef } from "../GptModelLayout";
 import { IProgramState } from "../Program";
 import { getBlockValueAtIdx } from "./DataFlow";
-import { getGraphConsumers, getRealConsumers, IBlkConsumer } from "./DataFlowBackward";
+import { getGraphConsumers, getRealConsumers, matmulMatrixForm, IBlkConsumer } from "./DataFlowBackward";
 import { gradName, shortName } from "./GradNames";
 import { DimStyle, dimStyleTextShort } from "../walkthrough/WalkthroughTools";
 import { Dim, Vec3 } from "@/src/utils/vector";
@@ -439,10 +439,15 @@ function describeBackwardOne(
         // 通式用「索引＋加總」寫，不用矩陣轉置 ——
         // 反向的轉置方向會隨 blk 是被乘的哪一邊而變，寫成 A · Bᵀ 一定會在某一邊標錯。
         // 這裡每個中括號就是該區塊自己的軸名，怎麼樣都不會寫反。
-        let rule = sp.sumLabel && other
+        let indexForm = sp.sumLabel && other
             ? `${self}[${axisNames(blk)}] = Σ ${sp.sumLabel}: `
                 + `${cn}[${axisNames(c.consumer)}] · ${on}[${axisNames(other.src)}]`
             : `${self} = ${cn} · ${on}`;
+
+        // 矩陣形式的轉置位置是推導出來的，不是寫死的 —— 見 matmulMatrixForm
+        let matForm = matmulMatrixForm(c, blk, other).replace(/\^T/g, 'ᵀ');
+        let rule = matForm ? `${indexForm}
+矩陣形式： ${matForm}` : indexForm;
 
         return {
             expr: `dot( ${cn}[${sp.gradSpan}], ${on}[${sp.otherSpan}] )`,
