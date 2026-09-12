@@ -42,3 +42,6 @@ styles/dist.css
 
 *.wat
 src/cpu/tests/*_.s
+
+# 反向傳播資料產生用的 minGPT（外部 repo，不納入版控）
+/minGPT/
