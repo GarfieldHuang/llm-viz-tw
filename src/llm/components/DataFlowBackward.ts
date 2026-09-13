@@ -19,9 +19,10 @@ import { BlKDepSpecial, IBlkCellDep, IBlkDef, IGptModelLayout, cellPosition } fr
 import { IProgramState } from "../Program";
 import {
     IDataFlowArgs, backWhiteColor, drawCircle, drawMaths, drawRoundedRect, drawZeroSymbol,
-    getBlockValueAtIdx, opColor, weightSrcColor, workingSrcColor, createMapping,
+    opColor, weightSrcColor, workingSrcColor, createMapping,
 } from "./DataFlow";
 import { gradColor, gradName, shortName } from "./GradNames";
+import { fwdAt } from "./GradMath";
 import { ITextBlockArgs, TextBlockType, mkTextBlock } from "./TextLayout";
 import { splitGridForHighlight, splitGrid, findSubBlocks, dimProps } from "../Annotations";
 import { getDepSrcIdx } from "../Interaction";
@@ -286,7 +287,7 @@ function drawSingleConsumer(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d
     case BlKDepSpecial.LayerNorm:
         return drawLayerNormBackward(args);
     case BlKDepSpecial.Gelu:
-        return drawGeluBackward(args, c);
+        return drawGeluBackward(args);
     case BlKDepSpecial.InputEmbed:
         return drawEmbedScatter(args, c);
     case BlKDepSpecial.Attention:
@@ -371,30 +372,32 @@ function drawSoftmaxBackward(args: IDataFlowArgs): BoundingBox3d {
     }));
 }
 
-/** dx = (γ / σ) ‧ ( d — E[d] — xn ‧ E[d ‧ xn] )，同樣整行綁在一起。 */
+/**
+ * dx = (1 / σ) ‧ ( g — E[g] — xn ‧ E[g ‧ xn] )，其中 g = γ ‧ dLN，同樣整行綁在一起。
+ *
+ * γ 必須放在括號**裡面**（先乘進 g 再取平均）。γ 每個通道都不一樣，
+ * 寫成 (γ / σ) ‧ ( d — E[d] … ) 只有在 γ 全部相等時才對。
+ */
 function drawLayerNormBackward(args: IDataFlowArgs): BoundingBox3d {
     let opts = fontOptsOf(args);
 
-    return drawMaths(args, args.center, mkTextBlock({
-        opts,
-        subs: [
-            { text: selfName(args) + ' = ', color: gradColor },
-            {
-                type: TextBlockType.Divide,
-                subs: [
-                    { subs: [{ text: 'γ', color: weightSrcColor }] },
-                    { subs: [{ text: 'σ', color: Colors.Aggregates }] },
-                ],
-            },
-            { text: ' ‧ ( ' },
-            { cellX: 1, cellY: 1, color: gradColor },
-            { text: ' — E[' },
-            { cellX: 1, cellY: 3, color: gradColor },
-            { text: '] — xn ‧ E[' },
-            { cellX: 1, cellY: 3, color: gradColor },
-            { text: ' ‧ xn] )' },
-        ],
-    }));
+    return twoLines(args, [
+        { text: selfName(args) + ' = ', color: gradColor },
+        {
+            type: TextBlockType.Divide,
+            subs: [
+                { subs: [{ text: '1' }] },
+                { subs: [{ text: 'σ', color: Colors.Aggregates }] },
+            ],
+        },
+        { text: ' ‧ ( ' },
+        { cellX: 1, cellY: 1, color: gradColor },
+        { text: ' — E[' },
+        { cellX: 1, cellY: 3, color: gradColor },
+        { text: '] — xn ‧ E[' },
+        { cellX: 1, cellY: 3, color: gradColor },
+        { text: ' ‧ xn] )' },
+    ], 'g = γ ‧ dLN');
 }
 
 /** 一般矩陣乘法：這一格的梯度 = 消費者那一整條梯度 與 另一個運算元 的點積。 */
@@ -591,7 +594,7 @@ function otherDotOperand(c: IBlkConsumer): IBlkCellDep | null {
  * 前向浮層畫的是 gelu 本身；這裡畫 gelu'，因為梯度乘上去的正是這個值。
  * 兩張圖擺在一起，就能看出為什麼負值區的梯度會被壓扁。
  */
-function drawGeluBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
+function drawGeluBackward(args: IDataFlowArgs): BoundingBox3d {
     let { state, center, mtx, blk, destIdx } = args;
 
     let k = Math.sqrt(2.0 / Math.PI);
@@ -627,9 +630,9 @@ function drawGeluBackward(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d {
 
     drawLineSegs(state.render.lineRender, pts, makeLineOpts({ color: gradColor, mtx, thick: 3.5 }));
 
-    // 標上目前這一格的 x，看它落在導函數的哪裡
-    let srcBlk = c.consumer.deps?.add?.[0]?.src ?? blk.deps?.add?.[0]?.src;
-    let srcVal = srcBlk ? getBlockValueAtIdx(srcBlk, destIdx) : null;
+    // 標上這一格的 x（前向值），看它落在導函數的哪裡。
+    // 反向檢視下 blk 的取值已經換成梯度，直接讀會拿到 dFc 而不是 x。
+    let srcVal = fwdAt(state, blk, destIdx);
     if (isNotNil(srcVal)) {
         drawCircle(state.render, new Vec3(mappingX(srcVal), mappingY(geluPrime(srcVal))), 2, 1, gradColor, mtx);
     }

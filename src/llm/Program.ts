@@ -75,6 +75,8 @@ export interface IDisplayState {
     topOutputOpacity?: number;
     lines: string[];
     hoverTarget: IHoverTarget | null;
+    /** 點一下格子固定在側邊欄的目標。不像 hoverTarget 每幀重置，要再點一次才會放開。 */
+    pinnedTarget: IHoverTarget | null;
     blkIdxHover: number[] | null;
     dimHover: DimStyle | null;
 }
@@ -215,6 +217,7 @@ export function initProgramState(canvasEl: HTMLCanvasElement, fontAtlasData: IFo
             tokenOutputColors: null,
             lines: [],
             hoverTarget: null,
+            pinnedTarget: null,
             dimHover: null,
             blkIdxHover: null,
         },

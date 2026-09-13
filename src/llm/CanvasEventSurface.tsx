@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef } from "react";
 import { IProgramState } from "./Program";
 import { useProgramState } from "./Sidebar";
 import { clamp } from "@/src/utils/data";
@@ -87,10 +87,34 @@ export const CanvasEventSurface: React.FC<{
             ev.preventDefault();
     });
 
+    let downPos = useRef<{ x: number, y: number } | null>(null);
+
     function handleMouseDown(ev: React.MouseEvent) {
+        downPos.current = { x: ev.clientX, y: ev.clientY };
         if (progState) {
             setDragStart(ev, { camAngle: progState.camera.angle, camTarget: progState.camera.center });
         }
+    }
+
+    // 沒有拖動的單擊：把滑鼠下的格子固定在側邊欄。
+    // 推導很長，要能把滑鼠移過去捲動、展開；只靠懸停的話，一離開格子面板就清空了。
+    function handleMouseUp(ev: React.MouseEvent) {
+        let d = downPos.current;
+        downPos.current = null;
+        if (!d || ev.button !== 0 || Math.abs(ev.clientX - d.x) + Math.abs(ev.clientY - d.y) > 4) {
+            return;
+        }
+        updateRenderState(ps => {
+            let h = ps.display.hoverTarget;
+            let p = ps.display.pinnedTarget;
+            if (!h) {
+                ps.display.pinnedTarget = null;
+                return;
+            }
+            let same = p && p.mainCube.idx === h.mainCube.idx && p.mainCube.name === h.mainCube.name
+                && p.mainIdx.x === h.mainIdx.x && p.mainIdx.y === h.mainIdx.y;
+            ps.display.pinnedTarget = same ? null : { ...h, mainIdx: h.mainIdx.clone() };
+        });
     }
 
     function handleMouseMove(ev: React.MouseEvent) {
@@ -122,6 +146,7 @@ export const CanvasEventSurface: React.FC<{
         ref={setEventSurfaceEl}
         className={s.canvasEventSurface}
         onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
         onMouseMove={handleMouseMove}
         onWheel={handleWheel}
         onContextMenu={ev => ev.preventDefault()}

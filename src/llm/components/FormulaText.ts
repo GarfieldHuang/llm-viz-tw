@@ -306,6 +306,16 @@ function describeBackward(state: IProgramState, blk: IBlkDef, idx: Vec3): Body {
             operands: [],
         };
     }
+    if (blk.t === 'a') {
+        return {
+            expr: '這是前向的中間聚合值，反向時沒有自己的梯度',
+            plain: true,
+            note: '它是 softmax 的最大值／exp 總和，或 Layer Norm 的平均與標準差。'
+                + '反向時它們對輸入的影響已經被併進 softmax 與 Layer Norm 的反向式裡'
+                + '（就是推導裡的 ρ、ḡ 那幾項），所以不單獨算。',
+            operands: [],
+        };
+    }
     if (blk.gradMissing) {
         return {
             expr: '這一塊沒有梯度資料',
@@ -389,8 +399,8 @@ function describeBackwardOne(
         };
     case BlKDepSpecial.LayerNorm:
         return {
-            expr: `γ / σ · ( ${cn}[${indexText(blk, idx)}] − E[${cn}] − xn · E[${cn}·xn] )`,
-            rule: `${self} = (γ / σ) ⊙ ( d − E[d] − xn ⊙ E[d ⊙ xn] )`,
+            expr: `( g[${indexText(blk, idx)}] − E[g] − xn · E[g·xn] ) / σ，g = γ ⊙ ${cn}`,
+            rule: `${self} = (1 / σ) ⊙ ( g − E[g] − xn ⊙ E[g ⊙ xn] )，g = γ ⊙ ${cn}`,
             note: '後兩項等於「扣掉整行的平均責任」與「扣掉與自己方向相關的部分」——'
                 + 'Layer Norm 不准反向去調整整行的平均與尺度，因為前向已經把它們歸一化掉了。'
                 + 'xn 是歸一化後、乘 γ 前的值。',

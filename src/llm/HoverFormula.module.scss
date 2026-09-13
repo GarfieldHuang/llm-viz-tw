@@ -130,3 +130,154 @@
     font-size: 11px;
     margin-bottom: 1px;
 }
+
+/* ---- 反向的逐步推導 ---- */
+
+.tall {
+    max-height: 48vh;
+}
+
+.headValue {
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 600;
+    color: #c06010;
+}
+
+.pinBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 11px;
+    color: #555;
+    background: #fff4d6;
+    border: 1px solid #ecd48a;
+    border-radius: 3px;
+    padding: 2px 6px;
+    margin-bottom: 4px;
+}
+
+.unpin {
+    font-size: 11px;
+    padding: 0 6px;
+    border: 1px solid #c9b060;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+
+    &:hover {
+        background: #f3e3a8;
+    }
+}
+
+.deriv {
+    margin-top: 2px;
+}
+
+.path {
+    margin-top: 6px;
+    border: 1px solid #e2e2e2;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.pathHead {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 8px;
+    background: #f3f1ec;
+    border-radius: 4px 4px 0 0;
+    font-size: 12px;
+}
+
+.clickable {
+    cursor: pointer;
+
+    &:hover {
+        background: #ebe6da;
+    }
+}
+
+.caret {
+    color: #888;
+    width: 10px;
+    flex-shrink: 0;
+}
+
+.pathTitle {
+    font-weight: 600;
+    color: #444;
+}
+
+.pathValue {
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #c06010;
+}
+
+.step {
+    padding: 4px 8px 2px;
+    border-top: 1px dashed #ececec;
+
+    &:first-of-type {
+        border-top: none;
+    }
+}
+
+.sumStep {
+    margin-top: 6px;
+    border: 1px solid #e2e2e2;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.stepLabel {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: #5a5a5a;
+}
+
+.stepTex {
+    display: block;
+    overflow-x: auto;
+    overflow-y: hidden;
+    font-size: 12px;
+
+    :global(.katex-display) {
+        margin: 3px 0;
+        text-align: left;
+    }
+
+    :global(.katex-display > .katex) {
+        text-align: left;
+    }
+}
+
+.stepNote {
+    font-size: 11.5px;
+    color: #666;
+    margin-bottom: 2px;
+}
+
+.check {
+    margin-top: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.checkOk {
+    background: #e8f5e8;
+    color: #235d23;
+}
+
+.checkBad {
+    background: #fbe7e7;
+    color: #8a1f1f;
+}
+
+.checkUnknown {
+    background: #f0f0f0;
+    color: #666;
+}
