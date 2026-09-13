@@ -1,9 +1,10 @@
 import React from 'react';
 import { Dim, Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
-import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
+import { commentary, DimStyle, ITimeInfo, IWalkthroughArgs, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
-import { argmaxAbs, demoAngle, focusCell, sceneCollapse, sceneElemMul, sceneMoveSlice, scenePairDot, shiftToBlock } from "./BackpropScenes";
+import { argmaxAbs, sceneCollapse, sceneElemMul, sceneMoveSlice, scenePairDot, shiftToBlock } from "./BackpropScenes";
+import { BackpropCamera, FILL_MOVE, FILL_SHOT } from "./BackpropCamera";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { Tex } from "../components/Tex";
 import { fwdAt, gradAt } from "../components/GradMath";
@@ -21,7 +22,6 @@ export function walkthrough11_BackMlp(args: IWalkthroughArgs) {
     let blk = layout.blocks[li];
     let POS = state.gradData?.lossPos ?? 5;
     let { C } = layout.shape;
-    let cell = layout.cell;
     let cam = (x: number, z: number) => shiftToBlock(layout, li, new Vec3(x, 0, z));
 
     setInitialCamera(state, cam(-154.755, -460.042), new Vec3(289.100, -8.900, 2.298));
@@ -52,6 +52,7 @@ MLP 的反向是整個 transformer 裡最單純的一段，值得先看 —— �
 這是加法的分支，所以那一行梯度**原封不動**地搬過去。（殘差那一章會細講這件事。）`;
     breakAfter();
 
+    let t_camCopy = afterTime(null, 0.8);
     let t_copy = afterTime(null, 3.0, 0.3);
     let t_copyFill = afterTime(null, 0.8);
 
@@ -65,6 +66,7 @@ MLP 的反向是整個 transformer 裡最單純的一段，值得先看 —— �
 它的梯度就要把這些影響全部收回來：dMlpOut 那一行（48 格）逐格乘上 ${c_blockRef('權重', blk.mlpProjWeight)} 的第 k 行，再加起來。`;
     breakAfter();
 
+    let t_camDAct = afterTime(null, 0.8);
     let t_dActDemo = afterTime(null, 5.5, 0.3);
     let t_dActFill = afterTime(null, 2.5);
 
@@ -104,6 +106,7 @@ ${embedInline(<Tex block tex={String.raw`d\text{Fc}_{t,k} = d\text{Gelu}_{t,k}\c
 道理一樣，只是這次沿 192 個神經元 k 加總。`;
     breakAfter();
 
+    let t_camDLn = afterTime(null, 0.8);
     let t_dLnDemo = afterTime(null, 5.0, 0.3);
     let t_dLnFill = afterTime(null, 2.5);
 
@@ -118,7 +121,9 @@ ${embedInline(<Tex block tex={String.raw`d\text{LN}_{c,t} = \sum_{k} d\text{Fc}_
 偏置更簡單：它對每個位置加同一個數，反向就是把每個位置的梯度加起來。`;
     breakAfter();
 
+    let t_camDW = afterTime(null, 0.8);
     let t_dWDemo = afterTime(null, 5.0, 0.3);
+    let t_camBias = afterTime(null, 0.8);
     let t_biasDemo = afterTime(null, 3.0, 0.3);
     let t_dWFill = afterTime(null, 3.0);
 
@@ -128,12 +133,56 @@ ${embedInline(<Tex block tex={String.raw`dW^{\text{fc}}_{c,k} = \sum_{t} d\text{
 
 整段的關鍵對照：MLP 裡每一格的梯度只跟**它自己的前向值**有關。等一下你會看到 attention 完全不是這樣。`;
 
-    // 相機依時間順序排：moveCameraTo 靠呼叫順序找「上一個」相機位置
-    let overview = cam(-160.2, -455.6);
-    moveCameraTo(state, t_moveCamera, overview, new Vec3(289.1, -8.9, 1.7));
-    moveCameraTo(state, t_zoomAlive, focusCell(state, blk.mlpFc, new Vec3(kAlive, POS, 0), -cell * 2, -cell * 3), demoAngle(0.6));
-    moveCameraTo(state, t_zoomDead, focusCell(state, blk.mlpFc, new Vec3(kDead, POS, 0), -cell * 2, -cell * 3), demoAngle(0.6));
-    moveCameraTo(state, t_zoomBack, overview, new Vec3(289.1, -8.9, 1.7));
+    // 每段示範寫成函式：同一個函式拿去畫，也拿去給相機量出它會用到畫面上的哪些地方
+    let copyScene = (tm: ITimeInfo) => sceneMoveSlice(state, tm,
+        { blk: blk.mlpResidual, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
+        { blk: blk.mlpResult, fixDim: Dim.X, fixIdx: POS },
+        { symbol: '=' });
+    let dActScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: blk.mlpResult, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
+        { blk: blk.mlpProjWeight, fixDim: Dim.X, fixIdx: kAlive, kind: 'fwd' },
+        { blk: blk.mlpAct, idx: new Vec3(kAlive, POS, 0) },
+        { maxPairs: 8 });
+    let geluScene = (k: number) => (tm: ITimeInfo) => sceneElemMul(state, tm,
+        { blk: blk.mlpAct, idx: new Vec3(k, POS, 0), kind: 'grad' },
+        { blk: blk.mlpFc, idx: new Vec3(k, POS, 0), kind: 'fwd' },
+        { blk: blk.mlpFc, idx: new Vec3(k, POS, 0) },
+        { label: "gelu'(x)" });
+    let aliveScene = geluScene(kAlive);
+    let deadScene = geluScene(kDead);
+    let dLnScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: blk.mlpFc, fixDim: Dim.Y, fixIdx: POS, kind: 'grad' },
+        { blk: blk.mlpFcWeight, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
+        { blk: blk.ln2.lnResid, idx: new Vec3(POS, cStar, 0) },
+        { maxPairs: 8 });
+    let dWScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: blk.mlpFc, fixDim: Dim.X, fixIdx: kAlive, kind: 'grad' },
+        { blk: blk.ln2.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
+        { blk: blk.mlpFcWeight, idx: new Vec3(kAlive, cStar, 0) },
+        { maxPairs: POS + 1 });
+    let biasScene = (tm: ITimeInfo) => sceneCollapse(state, tm,
+        { blk: blk.mlpFc, fixDim: Dim.X, fixIdx: kAlive, kind: 'grad' },
+        { blk: blk.mlpFcBias, idx: new Vec3(kAlive, 0, 0) },
+        { maxCells: POS + 1 });
+
+    // gelu′ 的曲線浮層畫在那一格上方，上面要多留空間
+    let POPUP = { top: 0.42 };
+
+    // 總覽沿用手調的值；特寫由場景實際會畫到的範圍算出來（MLP 很寬，來源太遠時會跟拍）
+    let camera = new BackpropCamera(state);
+    camera.shot(t_moveCamera, camera.fixed(cam(-160.2, -455.6), new Vec3(289.1, -8.9, 1.7)));
+    camera.shot(t_camCopy, camera.scene('copy', copyScene, t_copy));
+    camera.shot(t_camDAct, camera.scene('dAct', dActScene, t_dActDemo));
+    camera.shot(t_dActFill, camera.blocks('dActFill', [blk.mlpAct], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomAlive, camera.scene('alive', aliveScene, t_aliveDemo, POPUP));
+    camera.shot(t_zoomDead, camera.scene('dead', deadScene, t_deadDemo, POPUP));
+    camera.shot(t_zoomBack, camera.blocks('geluFill', [blk.mlpFc], FILL_SHOT));
+    camera.shot(t_camDLn, camera.scene('dLn', dLnScene, t_dLnDemo));
+    camera.shot(t_dLnFill, camera.blocks('dLnFill', [blk.ln2.lnResid], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_camDW, camera.scene('dW', dWScene, t_dWDemo));
+    camera.shot(t_camBias, camera.scene('bias', biasScene, t_biasDemo));
+    camera.shot(t_dWFill, camera.blocks('dWFill', [blk.mlpFcWeight, blk.mlpFcBias, blk.mlpProjWeight, blk.mlpProjBias], FILL_SHOT), FILL_MOVE);
+    camera.apply();
 
     focusBackwardScene(state, new Set([
         blk.ln2.lnResid, blk.mlpFcWeight, blk.mlpFcBias, blk.mlpFc, blk.mlpAct,
@@ -162,44 +211,16 @@ ${embedInline(<Tex block tex={String.raw`dW^{\text{fc}}_{c,k} = \sum_{t} d\text{
         ], { animateFirst: true });
     }
 
-    sceneMoveSlice(state, t_copy,
-        { blk: blk.mlpResidual, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
-        { blk: blk.mlpResult, fixDim: Dim.X, fixIdx: POS },
-        { symbol: '=' });
-
-    scenePairDot(state, t_dActDemo,
-        { blk: blk.mlpResult, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
-        { blk: blk.mlpProjWeight, fixDim: Dim.X, fixIdx: kAlive, kind: 'fwd' },
-        { blk: blk.mlpAct, idx: new Vec3(kAlive, POS, 0) },
-        { maxPairs: 8 });
-
-    for (let [timer, k] of [[t_aliveDemo, kAlive], [t_deadDemo, kDead]] as const) {
-        let idx = new Vec3(k, POS, 0);
-        sceneElemMul(state, timer,
-            { blk: blk.mlpAct, idx, kind: 'grad' },
-            { blk: blk.mlpFc, idx, kind: 'fwd' },
-            { blk: blk.mlpFc, idx },
-            { label: "gelu'(x)" });
+    copyScene(t_copy);
+    dActScene(t_dActDemo);
+    for (let [timer, k, run] of [[t_aliveDemo, kAlive, aliveScene], [t_deadDemo, kDead, deadScene]] as const) {
+        run(timer);
         if (timer.t > 0.15 && timer.t < 1) {
             // 浮層畫 gelu′ 的曲線，並把這一格的 x 標在上面
-            drawDataFlow(state, blk.mlpFc, idx);
+            drawDataFlow(state, blk.mlpFc, new Vec3(k, POS, 0));
         }
     }
-
-    scenePairDot(state, t_dLnDemo,
-        { blk: blk.mlpFc, fixDim: Dim.Y, fixIdx: POS, kind: 'grad' },
-        { blk: blk.mlpFcWeight, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
-        { blk: blk.ln2.lnResid, idx: new Vec3(POS, cStar, 0) },
-        { maxPairs: 8 });
-
-    scenePairDot(state, t_dWDemo,
-        { blk: blk.mlpFc, fixDim: Dim.X, fixIdx: kAlive, kind: 'grad' },
-        { blk: blk.ln2.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
-        { blk: blk.mlpFcWeight, idx: new Vec3(kAlive, cStar, 0) },
-        { maxPairs: POS + 1 });
-
-    sceneCollapse(state, t_biasDemo,
-        { blk: blk.mlpFc, fixDim: Dim.X, fixIdx: kAlive, kind: 'grad' },
-        { blk: blk.mlpFcBias, idx: new Vec3(kAlive, 0, 0) },
-        { maxCells: POS + 1 });
+    dLnScene(t_dLnDemo);
+    dWScene(t_dWDemo);
+    biasScene(t_biasDemo);
 }

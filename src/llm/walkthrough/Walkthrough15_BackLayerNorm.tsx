@@ -2,11 +2,12 @@ import React from 'react';
 import { Dim, Vec3 } from "@/src/utils/vector";
 import { lerp } from "@/src/utils/math";
 import { Phase } from "./Walkthrough";
-import { commentary, ITimeInfo, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
+import { commentary, ITimeInfo, IWalkthroughArgs, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
-import { argmaxAbs, demoAngle, dupCell, dupSlice, focusCell, plainCell, sceneCollapse, scenePairDot, seg } from "./BackpropScenes";
-import { cellPos, drawSymbolAt } from "./BackpropAnim";
-import { IBlkDef, setBlkPosition } from "../GptModelLayout";
+import { argmaxAbs, dupCell, dupSlice, place, plainCell, sceneCollapse, scenePairDot, seg, writeText } from "./BackpropScenes";
+import { BackpropCamera, FILL_MOVE, FILL_SHOT } from "./BackpropCamera";
+import { cellPos } from "./BackpropAnim";
+import { IBlkDef } from "../GptModelLayout";
 import { IProgramState } from "../Program";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { Tex } from "../components/Tex";
@@ -25,7 +26,6 @@ export function walkthrough15_BackLayerNorm(args: IWalkthroughArgs) {
     let X = layout.residual0;
     let POS = state.gradData?.lossPos ?? 5;
     let { C } = layout.shape;
-    let cell = layout.cell;
 
     setInitialCamera(state, new Vec3(-6.680, 0.000, -65.256), new Vec3(281.000, 9.000, 2.576));
     wt.dimHighlightBlocks = [ln1.lnResid, X];
@@ -55,6 +55,7 @@ ${c_blockRef('γ', ln1.lnSigma)} 對每個位置乘上歸一化後的值 xn，�
 
     let t_zoomGB = afterTime(null, 0.8);
     let t_betaDemo = afterTime(null, 3.5, 0.3);
+    let t_camGamma = afterTime(null, 0.8);
     let t_gammaDemo = afterTime(null, 4.5, 0.3);
     let t_gbFill = afterTime(null, 2.0);
 
@@ -89,12 +90,30 @@ ${embedInline(<Tex block tex={String.raw`dX_{c,t} = \frac{1}{\sigma_t}\Big(g_{c}
 
     let t_settle = afterTime(null, 1.6);
 
-    // 相機依時間順序排：moveCameraTo 靠呼叫順序找「上一個」相機位置
-    let overview = new Vec3(3.4, 0, -76.4);
-    moveCameraTo(state, t_moveCamera, overview, new Vec3(281, 9, 1.5));
-    moveCameraTo(state, t_zoomGB, focusCell(state, ln1.lnMu, new Vec3(0, cStar, 0), cell * 4, -cell * 4), demoAngle(0.9));
-    moveCameraTo(state, t_zoomX, focusCell(state, ln1.lnResid, new Vec3(POS, Math.floor(C / 2), 0), cell * 8, 0), demoAngle(0.95));
-    moveCameraTo(state, t_zoomOut, overview, new Vec3(281, 9, 1.5));
+    // 每段示範寫成函式：同一個函式拿去畫，也拿去給相機量出它會用到畫面上的哪些地方
+    let betaScene = (tm: ITimeInfo) => sceneCollapse(state, tm,
+        { blk: ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'grad' },
+        { blk: ln1.lnMu, idx: new Vec3(0, cStar, 0) },
+        { maxCells: POS + 1 });
+    // xn 沒有自己的貼圖；Layer Norm 的前向值是 γ·xn + β，同一列裡跟 xn 只差一個固定的縮放與平移，拿來代表
+    let gammaScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'grad' },
+        { blk: ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
+        { blk: ln1.lnSigma, idx: new Vec3(0, cStar, 0) },
+        { maxPairs: POS + 1 });
+    let dXScene = (tm: ITimeInfo) => sceneLnColumn(state, tm, ln1.lnResid, X, ln1.lnSigma, ln1.lnAgg2, block0.attnResidual, POS);
+
+    // 總覽沿用手調的值；特寫由場景實際會畫到的範圍算出來
+    let camera = new BackpropCamera(state);
+    let overview = camera.fixed(new Vec3(3.4, 0, -76.4), new Vec3(281, 9, 1.5));
+    camera.shot(t_moveCamera, overview);
+    camera.shot(t_zoomGB, camera.scene('beta', betaScene, t_betaDemo));
+    camera.shot(t_camGamma, camera.scene('gamma', gammaScene, t_gammaDemo));
+    camera.shot(t_gbFill, camera.blocks('gbFill', [ln1.lnSigma, ln1.lnMu], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomX, camera.scene('dX', dXScene, t_dXDemo));
+    camera.shot(t_dXFill, camera.blocks('dXFill', [X], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomOut, overview);
+    camera.apply();
 
     focusBackwardScene(state, new Set([
         X, ln1.lnAgg1, ln1.lnAgg2, ln1.lnSigma, ln1.lnMu, ln1.lnResid, block0.attnResidual,
@@ -114,19 +133,9 @@ ${embedInline(<Tex block tex={String.raw`dX_{c,t} = \frac{1}{\sigma_t}\Big(g_{c}
         processBackwardChain(state, t_settle, [X]);
     }
 
-    sceneCollapse(state, t_betaDemo,
-        { blk: ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'grad' },
-        { blk: ln1.lnMu, idx: new Vec3(0, cStar, 0) },
-        { maxCells: POS + 1 });
-
-    // xn 沒有自己的貼圖；Layer Norm 的前向值是 γ·xn + β，同一列裡跟 xn 只差一個固定的縮放與平移，拿來代表
-    scenePairDot(state, t_gammaDemo,
-        { blk: ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'grad' },
-        { blk: ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
-        { blk: ln1.lnSigma, idx: new Vec3(0, cStar, 0) },
-        { maxPairs: POS + 1 });
-
-    sceneLnColumn(state, t_dXDemo, ln1.lnResid, X, ln1.lnSigma, ln1.lnAgg2, block0.attnResidual, POS);
+    betaScene(t_betaDemo);
+    gammaScene(t_gammaDemo);
+    dXScene(t_dXDemo);
 }
 
 /** 這一章畫在模型裡的字的字級。格子只有 1.5 單位寬，字太小就看不見。 */
@@ -160,7 +169,7 @@ function sceneLnColumn(state: IProgramState, timer: ITimeInfo, ln: IBlkDef, X: I
     if (tLand > 0) {
         gp = work.lerp(xTl, tLand);
     }
-    setBlkPosition(g, gp);
+    place(g, gp);
     g.highlight = 0.35;
 
     // 1. γ 那一行飛到旁邊相乘
@@ -169,14 +178,14 @@ function sceneLnColumn(state: IProgramState, timer: ITimeInfo, ln: IBlkDef, X: I
         if (gm) {
             let from = cellPos(state, gamma, new Vec3(0, 0, 0));
             let beside = work.add(new Vec3(-cell * 3, 0, 0));
-            setBlkPosition(gm, from.lerp(beside, tG));
+            place(gm, from.lerp(beside, tG));
             if (tG >= 1) {
-                drawSymbolAt(state, beside.add(new Vec3(cell * 2, -cell * 2, cell)), 'x', TEXT);
+                writeText(state, beside.add(new Vec3(cell * 2, -cell * 2, cell)), 'x', TEXT);
             }
         }
     }
     if (tG >= 1 && tLand <= 0) {
-        drawSymbolAt(state, work.add(new Vec3(cell * 0.5, -cell * 4, cell)), 'g = γ ‧ dLN', TEXT);
+        writeText(state, work.add(new Vec3(cell * 0.5, -cell * 4, cell)), 'g = γ ‧ dLN', TEXT);
     }
 
     // 2、3. 一格平均值從上往下掃過整行，每經過一格就減掉
@@ -188,9 +197,9 @@ function sceneLnColumn(state: IProgramState, timer: ITimeInfo, ln: IBlkDef, X: I
         let m = plainCell(state, ln);
         let top = work.add(new Vec3(cell * 2.5, 0, 0));
         let y = lerp(0, colHeight - cell, tt);
-        setBlkPosition(m, top.add(new Vec3(0, y, 0)));
-        drawSymbolAt(state, top.add(new Vec3(cell * 6, y + cell * 0.5, cell)), label, TEXT);
-        drawSymbolAt(state, top.add(new Vec3(-cell * 0.9, y + cell * 0.5, cell)), '—', TEXT);
+        place(m, top.add(new Vec3(0, y, 0)));
+        writeText(state, top.add(new Vec3(cell * 6, y + cell * 0.5, cell)), label, TEXT);
+        writeText(state, top.add(new Vec3(-cell * 0.9, y + cell * 0.5, cell)), '—', TEXT);
     };
     sweep('E[g]', tMean);
     sweep('xn ‧ E[g ‧ xn]', tProj);
@@ -201,9 +210,9 @@ function sceneLnColumn(state: IProgramState, timer: ITimeInfo, ln: IBlkDef, X: I
         if (sd) {
             let from = cellPos(state, sigmaAgg, new Vec3(t, 0, 0));
             let to = work.add(new Vec3(0, -cell * 2.5, 0));
-            setBlkPosition(sd, from.lerp(to, tSig));
+            place(sd, from.lerp(to, tSig));
             if (tSig >= 1) {
-                drawSymbolAt(state, to.add(new Vec3(cell * 3.5, cell * 0.5, cell)), '/ σ', TEXT);
+                writeText(state, to.add(new Vec3(cell * 3.5, cell * 0.5, cell)), '/ σ', TEXT);
             }
         }
     }
@@ -213,9 +222,9 @@ function sceneLnColumn(state: IProgramState, timer: ITimeInfo, ln: IBlkDef, X: I
         let r = dupSlice(state, { blk: resid, fixDim: Dim.X, fixIdx: t, kind: 'grad' });
         if (r) {
             let from = cellPos(state, resid, new Vec3(t, 0, 0));
-            setBlkPosition(r, from.add(lift).lerp(xTl, tLand));
+            place(r, from.add(lift).lerp(xTl, tLand));
             if (tLand > 0.5) {
-                drawSymbolAt(state, xTl.add(new Vec3(-cell * 1.6, -cell * 1.5, cell * 2)), '+', TEXT);
+                writeText(state, xTl.add(new Vec3(-cell * 1.6, -cell * 1.5, cell * 2)), '+', TEXT);
             }
         }
     }

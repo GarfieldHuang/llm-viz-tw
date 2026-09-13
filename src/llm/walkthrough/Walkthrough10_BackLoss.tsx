@@ -1,9 +1,10 @@
 import React from 'react';
 import { Dim, Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
-import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
+import { commentary, DimStyle, ITimeInfo, IWalkthroughArgs, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
-import { argmaxAbs, demoAngle, focusCell, sceneLossSeed, scenePairDot } from "./BackpropScenes";
+import { argmaxAbs, sceneLossSeed, scenePairDot } from "./BackpropScenes";
+import { BackpropCamera, FILL_MOVE, FILL_SHOT } from "./BackpropCamera";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { Tex } from "../components/Tex";
 import { fwdAt } from "../components/GradMath";
@@ -18,7 +19,6 @@ export function walkthrough10_BackLoss(args: IWalkthroughArgs) {
     let POS = state.gradData?.lossPos ?? 5;
     let TARGET = state.gradData?.lossTarget ?? 2;
     let { C } = layout.shape;
-    let cell = layout.cell;
     let lnf = layout.ln_f.lnResid;
 
     setInitialCamera(state, new Vec3(-20.203, 0.000, -1642.819), new Vec3(281.600, -7.900, 2.298));
@@ -106,13 +106,29 @@ ${embedInline(<Tex block tex={String.raw`d\text{LN}_{c,t} = \sum_{v} dz_{v,t}\;W
 同一個矩陣乘法，對兩個運算元各有一條反向式，差別只在「沿哪一軸加總」。
 這份梯度接下來要穿過三層 transformer，一路回到嵌入表。`;
 
-    // 相機依時間順序排：moveCameraTo 靠呼叫順序找「上一個」相機位置
-    let overview = new Vec3(-24.4, 0, -1660.9);
-    moveCameraTo(state, t_moveCamera, overview, new Vec3(281.6, -7.9, 1.5));
-    moveCameraTo(state, t_zoomSeed, focusCell(state, layout.logits, new Vec3(POS, 1, 0), cell * 2, -cell * 2), demoAngle(0.5));
-    moveCameraTo(state, t_zoomW, focusCell(state, layout.lmHeadWeight, new Vec3(cStar, 0, 0), -cell * 6, -cell * 5), demoAngle(0.85));
-    moveCameraTo(state, t_zoomL, focusCell(state, lnf, new Vec3(POS, cStar, 0), -cell * 6, -cell * 3), demoAngle(0.85));
-    moveCameraTo(state, t_zoomOut, overview, new Vec3(281.6, -7.9, 1.5));
+    // 每段示範寫成函式：同一個函式拿去畫，也拿去給相機量出它會用到畫面上的哪些地方
+    let seedScene = (tm: ITimeInfo) => sceneLossSeed(state, tm, layout.logitsSoftmax, layout.logits, POS, TARGET);
+    let dWlmScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: layout.logits, fixDim: Dim.Y, fixIdx: 0, kind: 'grad' },
+        { blk: lnf, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
+        { blk: layout.lmHeadWeight, idx: new Vec3(cStar, 0, 0) },
+        { maxPairs: POS + 1 });
+    let dLnfScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: layout.logits, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
+        { blk: layout.lmHeadWeight, fixDim: Dim.X, fixIdx: cStar, kind: 'fwd' },
+        { blk: lnf, idx: new Vec3(POS, cStar, 0) });
+
+    // 總覽沿用手調的值；特寫由場景實際會畫到的範圍算出來
+    let camera = new BackpropCamera(state);
+    let overview = camera.fixed(new Vec3(-24.4, 0, -1660.9), new Vec3(281.6, -7.9, 1.5));
+    camera.shot(t_moveCamera, overview);
+    camera.shot(t_zoomSeed, camera.scene('seed', seedScene, t_seed));
+    camera.shot(t_zoomW, camera.scene('dWlm', dWlmScene, t_dWlmDemo));
+    camera.shot(t_dWlmFill, camera.blocks('dWlmFill', [layout.lmHeadWeight], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomL, camera.scene('dLnf', dLnfScene, t_dLnfDemo));
+    camera.shot(t_dLnfFill, camera.blocks('dLnfFill', [lnf], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomOut, overview);
+    camera.apply();
 
     focusBackwardScene(state, new Set([
         lnf, layout.lmHeadWeight, layout.logits, layout.logitsAgg1, layout.logitsAgg2, layout.logitsSoftmax,
@@ -129,16 +145,7 @@ ${embedInline(<Tex block tex={String.raw`d\text{LN}_{c,t} = \sum_{v} dz_{v,t}\;W
         processBackwardChain(state, t_dLnfFill, [layout.logits, lnf]);
     }
 
-    sceneLossSeed(state, t_seed, layout.logitsSoftmax, layout.logits, POS, TARGET);
-
-    scenePairDot(state, t_dWlmDemo,
-        { blk: layout.logits, fixDim: Dim.Y, fixIdx: 0, kind: 'grad' },
-        { blk: lnf, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
-        { blk: layout.lmHeadWeight, idx: new Vec3(cStar, 0, 0) },
-        { maxPairs: POS + 1 });
-
-    scenePairDot(state, t_dLnfDemo,
-        { blk: layout.logits, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
-        { blk: layout.lmHeadWeight, fixDim: Dim.X, fixIdx: cStar, kind: 'fwd' },
-        { blk: lnf, idx: new Vec3(POS, cStar, 0) });
+    seedScene(t_seed);
+    dWlmScene(t_dWlmDemo);
+    dLnfScene(t_dLnfDemo);
 }

@@ -1,9 +1,10 @@
 import React from 'react';
 import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
-import { commentary, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
+import { commentary, ITimeInfo, IWalkthroughArgs, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
 import { sceneMoveBlock, shiftToBlock } from "./BackpropScenes";
+import { BackpropCamera } from "./BackpropCamera";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { BlockText } from '../components/CommentaryHelpers';
 import { Tex } from "../components/Tex";
@@ -87,11 +88,23 @@ ${embedInline(<span className='block ml-2 my-1 text-sm'>
 
     let t_settle = afterTime(null, 1.6);
 
-    // 相機依時間順序排：moveCameraTo 靠呼叫順序找「上一個」相機位置
-    moveCameraTo(state, t_moveCamera, cam(-120.9, -365.8), new Vec3(291.1, 13.6, 2.6));
-    moveCameraTo(state, t_moveCamera2,
-        new Vec3(-120.9, 0, -(prev.y + blk.attnResidual.y + blk.attnResidual.dy) / 2),
-        new Vec3(291.1, 13.6, 6.5));
+    // 整塊飛：只看一條的話，從看得到整層的距離望過去只剩一條線
+    let split1Scene = (tm: ITimeInfo) => {
+        sceneMoveBlock(state, tm, blk.mlpResidual, blk.mlpResult, { symbol: '=' });
+        sceneMoveBlock(state, tm, blk.mlpResidual, blk.attnResidual, { symbol: '=', delay: 0.12 });
+    };
+    let split2Scene = (tm: ITimeInfo) => {
+        sceneMoveBlock(state, tm, blk.attnResidual, blk.attnOut, { symbol: '=' });
+        sceneMoveBlock(state, tm, blk.attnResidual, prev, { symbol: '=', delay: 0.12 });
+    };
+
+    // 飛的是整塊，一格很小也看得出來，不必跟拍；上方留給填色時的浮層
+    let BLOCK_MOVE = { minCellPx: 1, top: 0.2 };
+
+    let camera = new BackpropCamera(state);
+    camera.shot(t_moveCamera, camera.scene('split1', split1Scene, t_split1Demo, BLOCK_MOVE));
+    camera.shot(t_moveCamera2, camera.scene('split2', split2Scene, t_split2Demo, BLOCK_MOVE));
+    camera.apply();
 
     focusBackwardScene(state, new Set([
         prev, blk.attnOut, blk.attnResidual, blk.mlpResult, blk.mlpResidual,
@@ -110,9 +123,6 @@ ${embedInline(<span className='block ml-2 my-1 text-sm'>
         processBackwardChain(state, t_settle, [prev]);
     }
 
-    // 整塊飛：只看一條的話，從看得到整層的距離望過去只剩一條線
-    sceneMoveBlock(state, t_split1Demo, blk.mlpResidual, blk.mlpResult, { symbol: '=' });
-    sceneMoveBlock(state, t_split1Demo, blk.mlpResidual, blk.attnResidual, { symbol: '=', delay: 0.12 });
-    sceneMoveBlock(state, t_split2Demo, blk.attnResidual, blk.attnOut, { symbol: '=' });
-    sceneMoveBlock(state, t_split2Demo, blk.attnResidual, prev, { symbol: '=', delay: 0.12 });
+    split1Scene(t_split1Demo);
+    split2Scene(t_split2Demo);
 }

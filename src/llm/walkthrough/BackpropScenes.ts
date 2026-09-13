@@ -17,13 +17,17 @@
  *  - 場景只在 0 < t < 1 時畫；t 走完代表結果已經落地，交給 processBackwardChain 把整塊亮起來。
  *  - 畫在模型裡的字只能用字型圖集裡有的字：ASCII 加 Σ γ β σ μ ε ‧ —。
  *    乘號用 x、減號用 —（跟前向章節一樣）；× 與 − 不在圖集裡，畫出來是空白。
+ *  - 擺複本一律用 place、寫字一律用 writeText。BackpropCamera 取景時會在量測模式下把場景跑一遍，
+ *    靠這兩個函式知道一段動畫會用到畫面上的哪些地方。
  */
 import { dimConsts, dimProps } from "../Annotations";
 import { IBlkDef, IGptModelLayout, setBlkPosition } from "../GptModelLayout";
 import { IProgramState } from "../Program";
+import { measureText } from "../render/fontRender";
+import { clamp } from "@/src/utils/data";
 import { lerp, lerpSmoothstep } from "@/src/utils/math";
 import { Mat4f } from "@/src/utils/matrix";
-import { Dim, Vec3 } from "@/src/utils/vector";
+import { BoundingBox3d, Dim, Vec3, Vec4 } from "@/src/utils/vector";
 import { ITimeInfo } from "./WalkthroughTools";
 import { inverseLerp } from "./Walkthrough04_SelfAttention";
 import { cellPos, drawSymbolAt } from "./BackpropAnim";
@@ -58,6 +62,61 @@ export function showForward(blk: IBlkDef) {
         blk.access = { ...blk.access, disable: false };
     }
     blk.subs?.forEach(showForward);
+}
+
+// ---------------------------------------------------------------------------
+// 取景用的量測
+// ---------------------------------------------------------------------------
+
+/**
+ * 量測模式：場景照常算出每個複本與文字的位置，但不畫、不加進 layout，
+ * 只把它們占的範圍收進這個框。
+ */
+let measuring: BoundingBox3d | null = null;
+
+/** 擺放一個複本。量測模式下同時記下它占的範圍。 */
+export function place(blk: IBlkDef, pos: Vec3) {
+    setBlkPosition(blk, pos);
+    if (measuring) {
+        measuring.addInPlace(pos);
+        measuring.addInPlace(new Vec3(pos.x + blk.dx, pos.y + blk.dy, pos.z + blk.dz));
+    }
+}
+
+/** 在模型空間寫字，字的中心在 pos。量測模式下只記下字占的範圍。 */
+export function writeText(state: IProgramState, pos: Vec3, text: string, size: number) {
+    if (!measuring) {
+        drawSymbolAt(state, pos, text, size);
+        return;
+    }
+    let fontBuf = state.render?.modelFontBuf;
+    let w = fontBuf?.atlas?.faceInfos?.length
+        ? measureText(fontBuf, text, { color: new Vec4(0, 0, 0, 1), size })
+        : text.length * size * 0.6;
+    measuring.addInPlace(new Vec3(pos.x - w / 2, pos.y - size / 2, pos.z));
+    measuring.addInPlace(new Vec3(pos.x + w / 2, pos.y + size / 2, pos.z));
+}
+
+/**
+ * 把一段場景在 0..1 之間取樣執行，回傳每個取樣點上畫面會用到的範圍。
+ * run 收到的計時器只有 t 有意義 —— 場景函式本來也只看 t。
+ */
+export function measureScene(state: IProgramState, run: (timer: ITimeInfo) => void, samples: number) {
+    let ts: number[] = [];
+    let boxes: BoundingBox3d[] = [];
+    for (let i = 0; i <= samples; i++) {
+        let s = i / samples;
+        let box = new BoundingBox3d();
+        measuring = box;
+        try {
+            run({ name: '', start: 0, duration: 1, wait: 0, t: clamp(s, 0.002, 0.998), active: true });
+        } finally {
+            measuring = null;
+        }
+        ts.push(s);
+        boxes.push(box);
+    }
+    return { ts, boxes };
 }
 
 export type ValueKind = 'grad' | 'fwd';
@@ -104,7 +163,9 @@ function subRange(state: IProgramState, blk: IBlkDef, dim: Dim, iStart: number, 
 function addCopy(state: IProgramState, d: IBlkDef, kind: ValueKind | null): IBlkDef {
     d.name = '';
     d.opacity = 1;
-    state.layout.cubes.push(d);
+    if (!measuring) {
+        state.layout.cubes.push(d);
+    }
     if (kind) {
         show(d, kind);
     }
@@ -255,7 +316,7 @@ export function sceneFanOutWeighted(state: IProgramState, timer: ITimeInfo, src:
         if (tLand > 0) {
             pos = stage.lerp(destTl, tLand);
         }
-        setBlkPosition(copy, pos);
+        place(copy, pos);
         copy.highlight = 0.35;
 
         let midY = copy.dy / 2 - cell / 2;
@@ -275,16 +336,16 @@ export function sceneFanOutWeighted(state: IProgramState, timer: ITimeInfo, src:
                     wp = beside.lerp(into, tMul);
                     wd.opacity = 1 - tMul;
                 }
-                setBlkPosition(wd, wp);
+                place(wd, wp);
                 wd.highlight = 0.6;
                 if (tWeight >= 1 && tMul < 0.6) {
-                    drawSymbolAt(state, beside.add(new Vec3(cell * 1.6, cell * 0.5, cell)), 'x', SYM);
+                    writeText(state, beside.add(new Vec3(cell * 1.6, cell * 0.5, cell)), 'x', SYM);
                 }
             }
         }
 
         if (tLand > 0.8) {
-            drawSymbolAt(state, destTl.add(new Vec3(cell * 0.5, -cell * 1.8, cell * 2)), '+', SYM);
+            writeText(state, destTl.add(new Vec3(cell * 0.5, -cell * 1.8, cell * 2)), '+', SYM);
         }
     });
 }
@@ -341,8 +402,8 @@ export function scenePairDot(
             ap = aT.lerp(sumPos, tCollapse);
             bp = bT.lerp(sumPos, tCollapse);
         }
-        setBlkPosition(aCells[i].dup, ap);
-        setBlkPosition(bCells[i].dup, bp);
+        place(aCells[i].dup, ap);
+        place(bCells[i].dup, bp);
         aCells[i].dup.highlight = 0.3;
         bCells[i].dup.highlight = 0.3;
         if (tLand > 0) {
@@ -351,26 +412,26 @@ export function scenePairDot(
         }
 
         if (tt >= 1 && tCollapse <= 0) {
-            drawSymbolAt(state, aT.lerp(bT, 0.5).add(new Vec3(cell * 0.5, cell * 0.5, cell)), 'x', SYM * 0.8);
+            writeText(state, aT.lerp(bT, 0.5).add(new Vec3(cell * 0.5, cell * 0.5, cell)), 'x', SYM * 0.8);
         }
         if (i > 0 && tCollapse > 0 && tCollapse < 0.85) {
-            drawSymbolAt(state, ap.add(new Vec3(-cell * 1.2, -cell * 0.2, cell)), '+', SYM * 0.8);
+            writeText(state, ap.add(new Vec3(-cell * 1.2, -cell * 0.2, cell)), '+', SYM * 0.8);
         }
     }
     // 沒被演出來的格子也要算進去 —— 用「...」提醒還有更多項
     let fullCount = b.fixDim === Dim.X ? b.blk.cy : b.blk.cx;
     if (n < fullCount && tGather >= 1 && tCollapse <= 0) {
-        drawSymbolAt(state, stage.add(new Vec3(cell * 2.25, n * rowH + cell * 0.3, cell)), '...', LABEL);
+        writeText(state, stage.add(new Vec3(cell * 2.25, n * rowH + cell * 0.3, cell)), '...', LABEL);
     }
 
     if (opts?.suffix && tCollapse > 0.6 && tLand < 0.7) {
-        drawSymbolAt(state, sumPos.add(new Vec3(cell * 4, cell * 0.5, cell)), opts.suffix, LABEL);
+        writeText(state, sumPos.add(new Vec3(cell * 4, cell * 0.5, cell)), opts.suffix, LABEL);
     }
 
     if (tLand > 0) {
         let r = dupCell(state, dest.blk, dest.idx, 'grad');
         if (r) {
-            setBlkPosition(r, sumPos.lerp(destTl, tLand));
+            place(r, sumPos.lerp(destTl, tLand));
             r.highlight = 0.7;
         }
     }
@@ -414,20 +475,20 @@ export function sceneCollapse(
         if (tMerge > 0) {
             p = lifted.lerp(sumPos, tMerge);
         }
-        setBlkPosition(c.dup, p);
+        place(c.dup, p);
         c.dup.highlight = 0.3;
         if (tLand > 0) {
             c.dup.opacity = 0;
         }
         if (i > 0 && tLift >= 1 && tMerge < 0.3) {
-            drawSymbolAt(state, lifted.add(new Vec3(-cell * 0.2, -cell * 0.3, cell)), '+', SYM * 0.7);
+            writeText(state, lifted.add(new Vec3(-cell * 0.2, -cell * 0.3, cell)), '+', SYM * 0.7);
         }
     });
 
     if (tLand > 0) {
         let r = dupCell(state, dest.blk, dest.idx, 'grad');
         if (r) {
-            setBlkPosition(r, sumPos.lerp(destTl, tLand));
+            place(r, sumPos.lerp(destTl, tLand));
             r.highlight = 0.7;
         }
     }
@@ -458,12 +519,12 @@ export function sceneMoveSlice(
     }
     let from = opts?.from ?? sliceTl(state, src.blk, src.fixDim, src.fixIdx);
     let to = sliceTl(state, dest.blk, dest.fixDim, dest.fixIdx);
-    setBlkPosition(copy, flyPath(from, to, front(state), t));
+    place(copy, flyPath(from, to, front(state), t));
     copy.highlight = 0.45;
 
     if (opts?.symbol && t > 0.7) {
         let cell = state.layout.cell;
-        drawSymbolAt(state, to.add(new Vec3(-cell * 1.6, cell * 0.5, cell * 2)), opts.symbol, SYM);
+        writeText(state, to.add(new Vec3(-cell * 1.6, cell * 0.5, cell * 2)), opts.symbol, SYM);
     }
 }
 
@@ -492,12 +553,12 @@ export function sceneMoveBlock(state: IProgramState, timer: ITimeInfo, src: IBlk
     }, 'grad');
     let from = new Vec3(src.x, src.y, src.z);
     let to = new Vec3(dest.x, dest.y, dest.z);
-    setBlkPosition(copy, flyPath(from, to, front(state), t));
+    place(copy, flyPath(from, to, front(state), t));
     copy.highlight = 0.45;
 
     if (opts?.symbol && t > 0.7) {
         let cell = state.layout.cell;
-        drawSymbolAt(state, to.add(new Vec3(-cell * 2.5, cell * 2, cell * 2)), opts.symbol, SYM * 1.5);
+        writeText(state, to.add(new Vec3(-cell * 2.5, cell * 2, cell * 2)), opts.symbol, SYM * 1.5);
     }
 }
 
@@ -537,10 +598,10 @@ export function sceneSoftmaxRow(state: IProgramState, timer: ITimeInfo, P: IBlkD
     let tLand = seg(t, 0.75, 1.0);
 
     if (tRho > 0 && tLand < 0.9) {
-        setBlkPosition(plainCell(state, P), rhoPos);
+        place(plainCell(state, P), rhoPos);
     }
     if (tRho > 0.5 && tSub < 0.3) {
-        drawSymbolAt(state, rhoPos.add(new Vec3(cell * 0.5, cell * 2.8, cell)), 'Σ P‧dP', LABEL);
+        writeText(state, rhoPos.add(new Vec3(cell * 0.5, cell * 2.8, cell)), 'Σ P‧dP', LABEL);
     }
 
     for (let s = 0; s < n; s++) {
@@ -562,10 +623,10 @@ export function sceneSoftmaxRow(state: IProgramState, timer: ITimeInfo, P: IBlkD
                     pG = pairG.lerp(rhoPos, tRho);
                     pd.opacity = gd.opacity = 1 - tRho;
                 }
-                setBlkPosition(pd, pP);
-                setBlkPosition(gd, pG);
+                place(pd, pP);
+                place(gd, pG);
                 if (tPair >= 1 && tRho <= 0) {
-                    drawSymbolAt(state, pairP.add(new Vec3(cell * 0.5, cell * 1.4, cell)), 'x', SYM * 0.6);
+                    writeText(state, pairP.add(new Vec3(cell * 0.5, cell * 1.4, cell)), 'x', SYM * 0.6);
                 }
             }
         }
@@ -576,11 +637,11 @@ export function sceneSoftmaxRow(state: IProgramState, timer: ITimeInfo, P: IBlkD
         if (tSub > 0 && tLand < 0.6) {
             let g2 = dupCell(state, P, idx, 'grad');
             if (g2) {
-                setBlkPosition(g2, pFrom.lerp(subG, tSub));
+                place(g2, pFrom.lerp(subG, tSub));
             }
-            setBlkPosition(plainCell(state, P), rhoPos.lerp(subR, tSub));
+            place(plainCell(state, P), rhoPos.lerp(subR, tSub));
             if (tSub >= 1) {
-                drawSymbolAt(state, subG.add(new Vec3(cell * 0.5, cell * 1.4, cell)), '—', SYM * 0.6);
+                writeText(state, subG.add(new Vec3(cell * 0.5, cell * 1.4, cell)), '—', SYM * 0.6);
             }
         }
 
@@ -589,16 +650,16 @@ export function sceneSoftmaxRow(state: IProgramState, timer: ITimeInfo, P: IBlkD
             if (tLand < 0.6) {
                 let p3 = dupCell(state, P, idx, 'fwd');
                 if (p3) {
-                    setBlkPosition(p3, pFrom.lerp(under(S, s, -cell * 1.8), seg(tLand, 0, 0.4)));
+                    place(p3, pFrom.lerp(under(S, s, -cell * 1.8), seg(tLand, 0, 0.4)));
                 }
                 if (tLand > 0.35) {
-                    drawSymbolAt(state, under(S, s, -cell * 0.4).add(new Vec3(cell * 0.5, 0, cell)), 'x', SYM * 0.6);
+                    writeText(state, under(S, s, -cell * 0.4).add(new Vec3(cell * 0.5, 0, cell)), 'x', SYM * 0.6);
                 }
             }
             if (tLand > 0.55) {
                 let res = dupCell(state, S, idx, 'grad');
                 if (res) {
-                    setBlkPosition(res, subG.lerp(sTl, seg(tLand, 0.55, 1)));
+                    place(res, subG.lerp(sTl, seg(tLand, 0.55, 1)));
                     res.highlight = 0.6;
                 }
             }
@@ -645,20 +706,20 @@ export function sceneElemMul(
         bp = mid.lerp(destTl, tLand);
         ad.opacity = bd.opacity = 1 - tLand;
     }
-    setBlkPosition(ad, ap);
-    setBlkPosition(bd, bp);
+    place(ad, ap);
+    place(bd, bp);
     ad.highlight = bd.highlight = 0.4;
 
     if (tGather >= 1 && tLand <= 0.2) {
-        drawSymbolAt(state, aT.lerp(bT, 0.5).add(new Vec3(cell * 0.5, cell * 0.5, cell)), 'x', SYM);
+        writeText(state, aT.lerp(bT, 0.5).add(new Vec3(cell * 0.5, cell * 0.5, cell)), 'x', SYM);
         if (opts?.label) {
-            drawSymbolAt(state, bT.add(new Vec3(cell * 0.5, cell * 2.4, cell)), opts.label, LABEL);
+            writeText(state, bT.add(new Vec3(cell * 0.5, cell * 2.4, cell)), opts.label, LABEL);
         }
     }
     if (tLand > 0.6) {
         let r = dupCell(state, dest.blk, dest.idx, 'grad');
         if (r) {
-            setBlkPosition(r, destTl);
+            place(r, destTl);
             r.highlight = 0.7;
         }
     }
@@ -692,17 +753,17 @@ export function sceneLossSeed(state: IProgramState, timer: ITimeInfo, probs: IBl
         if (tv < 0.85) {
             let pd = dupCell(state, probs, idx, 'fwd');
             if (pd) {
-                setBlkPosition(pd, tv < 0.6 ? from.lerp(to.add(lift), tv / 0.6) : to.add(lift));
+                place(pd, tv < 0.6 ? from.lerp(to.add(lift), tv / 0.6) : to.add(lift));
                 pd.highlight = 0.5;
             }
         }
         if (tv > 0.45 && tv < 0.9) {
-            drawSymbolAt(state, to.add(lift).add(new Vec3(cell * 3.2, cell * 0.5, cell)), v === target ? '— 1' : '— 0', LABEL);
+            writeText(state, to.add(lift).add(new Vec3(cell * 3.2, cell * 0.5, cell)), v === target ? '— 1' : '— 0', LABEL);
         }
         if (tv > 0.8) {
             let r = dupCell(state, logits, idx, 'grad');
             if (r) {
-                setBlkPosition(r, to.add(lift).lerp(to, seg(tv, 0.8, 1)));
+                place(r, to.add(lift).lerp(to, seg(tv, 0.8, 1)));
                 r.highlight = 0.7;
             }
         }
@@ -743,25 +804,4 @@ export function range(n: number) {
 export function shiftToBlock(layout: IGptModelLayout, blockIdx: number, v: Vec3) {
     let dy = layout.blocks[blockIdx].ln1.lnResid.y - layout.blocks[0].ln1.lnResid.y;
     return new Vec3(v.x, v.y, v.z - dy);
-}
-
-/**
- * 對準某一格的相機中心（再加一點偏移）。
- *
- * 相機中心用的是世界座標：模型的 (x, y, z) 對到世界的 (x, -z, -y)（見 Camera.ts 的 modelMtx）。
- * 各章都看 z ≈ 0 的平面，所以中心的第二個分量固定為 0。
- */
-export function focusCell(state: IProgramState, blk: IBlkDef, idx: Vec3, dx = 0, dy = 0) {
-    let p = cellPos(state, blk, idx);
-    return new Vec3(p.x + dx, 0, -(p.y + dy));
-}
-
-/**
- * 示範時的相機角度：正面平視（方位角 270°）。
- *
- * 飛行中的格子是「浮在區塊前方」（+z），斜著看會整個往旁邊偏，跟別的區塊疊在一起；
- * 正面看才會剛好落在來源與目的地的正前方。
- */
-export function demoAngle(zoom: number) {
-    return new Vec3(270, -6, zoom);
 }

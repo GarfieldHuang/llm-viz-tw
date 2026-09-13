@@ -1,9 +1,10 @@
 import React from 'react';
 import { Dim, Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
-import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
+import { commentary, DimStyle, ITimeInfo, IWalkthroughArgs, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
 import { range, sceneMoveSlice } from "./BackpropScenes";
+import { BackpropCamera, FILL_MOVE, FILL_SHOT } from "./BackpropCamera";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { Tex } from "../components/Tex";
 import { getBlockValueAtIdx } from "../components/DataFlow";
@@ -53,6 +54,7 @@ export function walkthrough16_BackEmbedding(args: IWalkthroughArgs) {
 看著前六個位置的梯度一行一行飛回詞嵌入表：同一個 token 出現幾次，那一行就被加幾次。`;
     breakAfter();
 
+    let t_camTok = afterTime(null, 0.8);
     let t_dTokDemo = afterTime(null, 6.0, 0.3);
     let t_dTokFill = afterTime(null, 2.0);
 
@@ -73,6 +75,7 @@ ${c_blockRef('位置嵌入表', layout.posEmbedObj)} 的情況剛好相反：位
 所以每一行最多只拿到一份梯度，原封不動地搬過去。`;
     breakAfter();
 
+    let t_camPos = afterTime(null, 0.8);
     let t_dPosDemo = afterTime(null, 4.5, 0.3);
     let t_dPosFill = afterTime(null, 2.0);
 
@@ -100,7 +103,29 @@ ${embedInline(<Tex block tex={String.raw`dW^{\text{pe}}_{c,t} = dX_{c,t}`} />)}
 optimizer 接手的就是這些數字。反向傳播的工作，到此為止。`;
     breakAfter();
 
-    moveCameraTo(state, t_moveCamera, new Vec3(9.5, 0, -48.4), new Vec3(287, 14.5, 1.4));
+    // 每段示範寫成函式：同一個函式拿去畫，也拿去給相機量出它會用到畫面上的哪些地方
+    let tokScene = (tm: ITimeInfo) => tokens.forEach((tok, t) => {
+        sceneMoveSlice(state, tm,
+            { blk: layout.residual0, fixDim: Dim.X, fixIdx: t, kind: 'grad' },
+            { blk: layout.tokEmbedObj, fixDim: Dim.X, fixIdx: tok },
+            { symbol: '+', delay: t * 0.1 });
+    });
+    let posScene = (tm: ITimeInfo) => tokens.forEach((_, t) => {
+        sceneMoveSlice(state, tm,
+            { blk: layout.residual0, fixDim: Dim.X, fixIdx: t, kind: 'grad' },
+            { blk: layout.posEmbedObj, fixDim: Dim.X, fixIdx: t },
+            { symbol: '=', delay: t * 0.08 });
+    });
+
+    // 總覽沿用手調的值；示範與填色由實際會畫到的範圍算出來
+    let camera = new BackpropCamera(state);
+    camera.shot(t_moveCamera, camera.fixed(new Vec3(9.5, 0, -48.4), new Vec3(287, 14.5, 1.4)));
+    camera.shot(t_camTok, camera.scene('tok', tokScene, t_dTokDemo));
+    camera.shot(t_dTokFill, camera.blocks('tokFill', [layout.tokEmbedObj], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_camPos, camera.scene('pos', posScene, t_dPosDemo));
+    camera.shot(t_dPosFill, camera.blocks('posFill', [layout.posEmbedObj], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_end, camera.blocks('end', [layout.tokEmbedObj, layout.residual0, layout.posEmbedObj], FILL_SHOT), FILL_MOVE);
+    camera.apply();
 
     focusBackwardScene(state, new Set([
         layout.idxObj,
@@ -123,16 +148,6 @@ optimizer 接手的就是這些數字。反向傳播的工作，到此為止。`
         processBackwardChain(state, t_end, [layout.posEmbedObj]);
     }
 
-    tokens.forEach((tok, t) => {
-        sceneMoveSlice(state, t_dTokDemo,
-            { blk: layout.residual0, fixDim: Dim.X, fixIdx: t, kind: 'grad' },
-            { blk: layout.tokEmbedObj, fixDim: Dim.X, fixIdx: tok },
-            { symbol: '+', delay: t * 0.1 });
-    });
-    tokens.forEach((_, t) => {
-        sceneMoveSlice(state, t_dPosDemo,
-            { blk: layout.residual0, fixDim: Dim.X, fixIdx: t, kind: 'grad' },
-            { blk: layout.posEmbedObj, fixDim: Dim.X, fixIdx: t },
-            { symbol: '=', delay: t * 0.08 });
-    });
+    tokScene(t_dTokDemo);
+    posScene(t_dPosDemo);
 }

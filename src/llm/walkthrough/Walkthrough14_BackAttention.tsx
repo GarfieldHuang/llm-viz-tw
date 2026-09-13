@@ -2,9 +2,10 @@ import React from 'react';
 import { Dim, Vec3 } from "@/src/utils/vector";
 import { lerpSmoothstep } from "@/src/utils/math";
 import { Phase } from "./Walkthrough";
-import { commentary, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
+import { commentary, ITimeInfo, IWalkthroughArgs, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
-import { argmaxAbs, demoAngle, focusCell, range, sceneFanOutWeighted, scenePairDot, sceneSoftmaxRow, shiftToBlock } from "./BackpropScenes";
+import { argmaxAbs, range, sceneFanOutWeighted, scenePairDot, sceneSoftmaxRow, shiftToBlock } from "./BackpropScenes";
+import { BackpropCamera, FILL_MOVE, FILL_SHOT } from "./BackpropCamera";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { Tex } from "../components/Tex";
 import { fwdAt, gradAt } from "../components/GradMath";
@@ -66,6 +67,7 @@ ${embedInline(<Tex block tex={String.raw`dV_{a,s} = \sum_{t} dO_{a,t}\;P_{t,s}`}
 所以它的梯度是 dO 的第 5 行和 V 的第 s 行的點積。`;
     breakAfter();
 
+    let t_camDP = afterTime(null, 0.8);
     let t_dPDemo = afterTime(null, 5.0, 0.3);
     let t_dPFill = afterTime(null, 2.0);
 
@@ -100,6 +102,7 @@ ${embedInline(<Tex block tex={String.raw`dS_{t,s} = P_{t,s}\Big(dP_{t,s} - \unde
 
     let t_zoomQK = afterTime(null, 0.8);
     let t_dQDemo = afterTime(null, 4.5, 0.3);
+    let t_camDK = afterTime(null, 0.8);
     let t_dKDemo = afterTime(null, 4.5, 0.3);
     let t_dQKFill = afterTime(null, 2.5);
 
@@ -136,15 +139,52 @@ K、V 的權重同理。optimizer 拿走的就是這幾張表 —— 整個反�
     // 先把 head 攤平，之後所有的格子位置（包括相機要對準的地方）都以攤平後的排版為準
     alignHead(layout, li, HEAD, t_fade.t);
 
-    // 相機依時間順序排：moveCameraTo 靠呼叫順序找「上一個」相機位置
-    let cell = layout.cell;
-    let overview = cam(-92.7, -219);
-    moveCameraTo(state, t_moveCamera, overview, new Vec3(286, 12.8, 1.4));
-    moveCameraTo(state, t_zoomV, focusCell(state, head.vBlock, new Vec3(POS, 0, 0), cell * 6, cell * 10), demoAngle(0.75));
-    // softmax 的工作區在兩個矩陣正下方，相機要把矩陣底部與下方一起框進來
-    moveCameraTo(state, t_zoomS, focusCell(state, head.attnMtxSm, new Vec3(POS, head.attnMtxSm.cy - 1, 0), cell * 12, cell * 2), demoAngle(0.8));
-    moveCameraTo(state, t_zoomQK, focusCell(state, head.kBlock, new Vec3(POS, 0, 0), -cell * 4, cell * 6), demoAngle(1.0));
-    moveCameraTo(state, t_zoomW, overview, new Vec3(286, 12.8, 1.4));
+    // 每段示範寫成函式：同一個函式拿去畫，也拿去給相機量出它會用到畫面上的哪些地方
+    let dVScene = (tm: ITimeInfo) => sceneFanOutWeighted(state, tm, { blk: head.vOutBlock, colIdx: POS },
+        range(POS + 1).map(s => ({
+            weight: { blk: head.attnMtxSm, idx: new Vec3(s, POS, 0) },
+            dest: { blk: head.vBlock, colIdx: s },
+        })));
+    let dPScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: head.vOutBlock, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
+        { blk: head.vBlock, fixDim: Dim.X, fixIdx: sStar, kind: 'fwd' },
+        { blk: head.attnMtxSm, idx: new Vec3(sStar, POS, 0) },
+        { maxPairs: 8 });
+    let dSScene = (tm: ITimeInfo) => sceneSoftmaxRow(state, tm, head.attnMtxSm, head.attnMtx, POS);
+    let dQScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: head.attnMtx, fixDim: Dim.Y, fixIdx: POS, kind: 'grad' },
+        { blk: head.kBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'fwd' },
+        { blk: head.qBlock, idx: new Vec3(POS, aStar, 0) },
+        { maxPairs: POS + 1, suffix: `/ ${sqrtA}` });
+    let dKScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: head.attnMtx, fixDim: Dim.X, fixIdx: sStar, kind: 'grad' },
+        { blk: head.qBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'fwd' },
+        { blk: head.kBlock, idx: new Vec3(sStar, aStar, 0) },
+        { maxPairs: POS + 1, suffix: `/ ${sqrtA}` });
+    let dWScene = (tm: ITimeInfo) => scenePairDot(state, tm,
+        { blk: head.qBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'grad' },
+        { blk: blk.ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
+        { blk: head.qWeightBlock, idx: new Vec3(cStar, aStar, 0) },
+        { maxPairs: POS + 1 });
+
+    // 總覽沿用手調的值；特寫由場景實際會畫到的範圍算出來，所以要在 alignHead 之後
+    let camera = new BackpropCamera(state);
+    camera.shot(t_moveCamera, camera.fixed(cam(-92.7, -219), new Vec3(286, 12.8, 1.4)));
+    camera.shot(t_zoomV, camera.scene('dV', dVScene, t_dVDemo));
+    camera.shot(t_dVFill, camera.blocks('dVFill', [head.vBlock], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_camDP, camera.scene('dP', dPScene, t_dPDemo));
+    camera.shot(t_dPFill, camera.blocks('dPFill', [head.attnMtxSm], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomS, camera.scene('dS', dSScene, t_dSDemo));
+    camera.shot(t_dSFill, camera.blocks('dSFill', [head.attnMtx], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomQK, camera.scene('dQ', dQScene, t_dQDemo));
+    camera.shot(t_camDK, camera.scene('dK', dKScene, t_dKDemo));
+    camera.shot(t_dQKFill, camera.blocks('dQKFill', [head.qBlock, head.kBlock], FILL_SHOT), FILL_MOVE);
+    camera.shot(t_zoomW, camera.scene('dW', dWScene, t_dWDemo));
+    camera.shot(t_dWFill, camera.blocks('dWFill', [
+        head.qWeightBlock, head.kWeightBlock, head.vWeightBlock,
+        head.qBiasBlock, head.kBiasBlock, head.vBiasBlock,
+    ], FILL_SHOT), FILL_MOVE);
+    camera.apply();
 
     if (t_fade.t > 0) {
         processBackwardChain(state, t_fade, [head.vOutBlock]);
@@ -168,37 +208,12 @@ K、V 的權重同理。optimizer 拿走的就是這幾張表 —— 整個反�
         ], { animateFirst: true });
     }
 
-    sceneFanOutWeighted(state, t_dVDemo, { blk: head.vOutBlock, colIdx: POS },
-        range(POS + 1).map(s => ({
-            weight: { blk: head.attnMtxSm, idx: new Vec3(s, POS, 0) },
-            dest: { blk: head.vBlock, colIdx: s },
-        })));
-
-    scenePairDot(state, t_dPDemo,
-        { blk: head.vOutBlock, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
-        { blk: head.vBlock, fixDim: Dim.X, fixIdx: sStar, kind: 'fwd' },
-        { blk: head.attnMtxSm, idx: new Vec3(sStar, POS, 0) },
-        { maxPairs: 8 });
-
-    sceneSoftmaxRow(state, t_dSDemo, head.attnMtxSm, head.attnMtx, POS);
-
-    scenePairDot(state, t_dQDemo,
-        { blk: head.attnMtx, fixDim: Dim.Y, fixIdx: POS, kind: 'grad' },
-        { blk: head.kBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'fwd' },
-        { blk: head.qBlock, idx: new Vec3(POS, aStar, 0) },
-        { maxPairs: POS + 1, suffix: `/ ${sqrtA}` });
-
-    scenePairDot(state, t_dKDemo,
-        { blk: head.attnMtx, fixDim: Dim.X, fixIdx: sStar, kind: 'grad' },
-        { blk: head.qBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'fwd' },
-        { blk: head.kBlock, idx: new Vec3(sStar, aStar, 0) },
-        { maxPairs: POS + 1, suffix: `/ ${sqrtA}` });
-
-    scenePairDot(state, t_dWDemo,
-        { blk: head.qBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'grad' },
-        { blk: blk.ln1.lnResid, fixDim: Dim.Y, fixIdx: cStar, kind: 'fwd' },
-        { blk: head.qWeightBlock, idx: new Vec3(cStar, aStar, 0) },
-        { maxPairs: POS + 1 });
+    dVScene(t_dVDemo);
+    dPScene(t_dPDemo);
+    dSScene(t_dSDemo);
+    dQScene(t_dQDemo);
+    dKScene(t_dKDemo);
+    dWScene(t_dWDemo);
 }
 
 /**
