@@ -3,9 +3,10 @@ import { Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
-import { flyCopies } from "./BackpropAnim";
+import { sceneMoveBlock, shiftToBlock } from "./BackpropScenes";
 import { embedInline } from "./Walkthrough01_Prelim";
 import { BlockText } from '../components/CommentaryHelpers';
+import { Tex } from "../components/Tex";
 
 export function walkthrough12_BackResidual(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_blockRef, breakAfter } } = args;
@@ -14,13 +15,14 @@ export function walkthrough12_BackResidual(args: IWalkthroughArgs) {
         return;
     }
 
-    let block0 = layout.blocks[0];
+    let li = layout.blocks.length - 1;
+    let blk = layout.blocks[li];
+    // 注意力殘差的另一個加數：上一層的輸出（第 0 層的話就是嵌入）
+    let prev = li > 0 ? layout.blocks[li - 1].mlpResidual : layout.residual0;
+    let cam = (x: number, z: number) => shiftToBlock(layout, li, new Vec3(x, 0, z));
 
-    // 損失只看位置 5，所以拿那一行的某一格來示範才有非零的梯度可看
-    let demoIdx = new Vec3(5, 20, 0);
-
-    setInitialCamera(state, new Vec3(-135.531, 0.000, -353.905), new Vec3(291.100, 13.600, 5.706));
-    wt.dimHighlightBlocks = [block0.attnResidual, block0.mlpResidual];
+    setInitialCamera(state, cam(-135.531, -353.905), new Vec3(291.100, 13.600, 5.706));
+    wt.dimHighlightBlocks = [blk.attnResidual, blk.mlpResidual, prev];
 
     commentary(wt, null, 0)`
 這一章只講一個運算：**加法**。
@@ -34,44 +36,43 @@ export function walkthrough12_BackResidual(args: IWalkthroughArgs) {
 
     breakAfter();
     commentary(wt)`
-先不要看公式，直接看一格會發生什麼事。
+先不要看公式，直接看梯度會發生什麼事。
 
-我從 ${c_blockRef('MLP 殘差', block0.mlpResidual)} 挑一格梯度出來。接下來你會看到它
-**分裂成兩個一模一樣的數字**，分頭飛向兩條路。`;
+它在 ${c_blockRef('MLP 殘差', blk.mlpResidual)}。前向時這裡是「MLP 的輸出 + 注意力殘差」，
+所以接下來你會看到這一整塊梯度**分裂成兩份一模一樣的**，分頭飛向兩個加數。`;
     breakAfter();
 
-    let t_splitDemo = afterTime(null, 5.5);
-
-    breakAfter();
-    commentary(wt)`
-兩份**完全相同**。沒有縮放、沒有衰減、沒有矩陣乘法。
-
-規則就這麼一句：前向是 c = a + b，那麼不論 a、b 是什麼，c 對兩者的偏導都是 1，所以
-
-da = dc　　db = dc
-
-一份給 ${c_blockRef('MLP Result', block0.mlpResult)} —— 要穿過 MLP 那條迂迴的路，
-經過兩個線性層和一個 GELU，每一步都會被權重矩陣改造一次。
-
-另一份給 ${c_blockRef('注意力殘差', block0.attnResidual)} —— **直接跳過整個 MLP**，一步到位。`;
-    breakAfter();
-
-    let t_split1 = afterTime(null, 6.0);
+    let t_split1Demo = afterTime(null, 4.0, 0.3);
+    let t_split1Fill = afterTime(null, 2.0);
 
     breakAfter();
     commentary(wt)`
-再往下一層，同樣的事情又發生一次：注意力殘差把梯度複製給
-${c_blockRef('注意力輸出', block0.attnOut)} 和 ${c_blockRef('原始的嵌入', layout.residual0)}。
+兩份**完全相同**。沒有縮放、沒有衰減、沒有矩陣乘法。規則就這麼一句：
 
-${embedInline(<div className='ml-2 my-1 text-sm'>
-        <div>迂迴那條路：<BlockText blk={block0.mlpResult}>MLP</BlockText> → 乘權重 → GELU → 乘權重 → 梯度被改造好幾次</div>
-        <div>高速公路：<BlockText blk={block0.attnResidual}>殘差</BlockText> → 乘數恆為 1 → 原封不動送到底</div>
-    </div>)}`;
+${embedInline(<Tex block tex={String.raw`c = a + b \;\Rightarrow\; \frac{\partial c}{\partial a} = \frac{\partial c}{\partial b} = 1 \;\Rightarrow\; da = dc,\quad db = dc`} />)}
+
+一份給 ${c_blockRef('MLP 的輸出', blk.mlpResult)} —— 要穿過 MLP 那條迂迴的路，每一步都被權重改造一次。
+另一份給 ${c_blockRef('注意力殘差', blk.attnResidual)} —— **直接跳過整個 MLP**。
+
+（注意力殘差其實還會從 Layer Norm 2 那條路再收到一份。一格被兩個地方用到，梯度就是兩份相加 ——
+點一下那一格，側邊欄會把兩條路各推一次再加起來。）`;
     breakAfter();
 
-    let t_split2 = afterTime(null, 6.0);
+    let t_moveCamera2 = afterTime(null, 1.5);
+    let t_split2Demo = afterTime(null, 4.0, 0.3);
+    let t_split2Fill = afterTime(null, 2.0);
 
     breakAfter();
+    commentary(wt)`
+再往上一步，同樣的事又發生一次：注意力殘差把梯度複製給
+${c_blockRef('注意力輸出', blk.attnOut)} 和 ${c_blockRef('上一層的輸出', prev)}。
+
+${embedInline(<span className='block ml-2 my-1 text-sm'>
+        <span className='block'>迂迴那條路：<BlockText blk={blk.mlpResult}>MLP</BlockText> → 乘權重 → GELU → 乘權重 → 梯度被改造好幾次</span>
+        <span className='block'>高速公路：<BlockText blk={blk.attnResidual}>殘差</BlockText> → 乘數恆為 1 → 原封不動送到上一層</span>
+    </span>)}`;
+    breakAfter();
+
     commentary(wt)`
 現在把這件事乘上深度來想。
 
@@ -84,42 +85,34 @@ ${embedInline(<div className='ml-2 my-1 text-sm'>
 所以 GPT 能疊到 96 層，靠的不是什麼精巧的初始化，就是這個加號。`;
     breakAfter();
 
-    let t_settle = afterTime(null, 2.4);
+    let t_settle = afterTime(null, 1.6);
 
-    moveCameraTo(state, t_moveCamera, new Vec3(-120.9, 0, -365.8), new Vec3(291.1, 13.6, 3.4));
+    // 相機依時間順序排：moveCameraTo 靠呼叫順序找「上一個」相機位置
+    moveCameraTo(state, t_moveCamera, cam(-120.9, -365.8), new Vec3(291.1, 13.6, 2.6));
+    moveCameraTo(state, t_moveCamera2,
+        new Vec3(-120.9, 0, -(prev.y + blk.attnResidual.y + blk.attnResidual.dy) / 2),
+        new Vec3(291.1, 13.6, 6.5));
 
-    let relevant = new Set([
-        layout.residual0,
-        block0.attnOut,
-        block0.attnResidual,
-        block0.mlpResult,
-        block0.mlpResidual,
-    ]);
-    focusBackwardScene(state, relevant, t_fade.t);
+    focusBackwardScene(state, new Set([
+        prev, blk.attnOut, blk.attnResidual, blk.mlpResult, blk.mlpResidual,
+    ]), t_fade.t);
 
-    // 一格的示範：複製成兩份飛走。加法的反向就這麼一件事，用看的比用讀的快。
-    if (t_splitDemo.t > 0 && t_split1.t === 0) {
-        flyCopies(state, t_splitDemo,
-            { blk: block0.mlpResidual, idx: demoIdx },
-            [
-                { blk: block0.mlpResult, idx: demoIdx },
-                { blk: block0.attnResidual, idx: demoIdx },
-            ],
-            { symbol: '=' });
+    if (t_fade.t > 0) {
+        processBackwardChain(state, t_fade, [blk.mlpResidual]);
     }
-
-    // 一分為二：同一份梯度同時落在兩條分支上
-    if (t_split1.t > 0) {
-        processBackwardChain(state, t_split1, [
-            block0.mlpResidual, block0.mlpResult, block0.attnResidual,
-        ]);
+    if (t_split1Fill.t > 0) {
+        processBackwardChain(state, t_split1Fill, [blk.mlpResidual, blk.mlpResult, blk.attnResidual]);
     }
-    if (t_split2.t > 0) {
-        processBackwardChain(state, t_split2, [
-            block0.attnResidual, block0.attnOut, layout.residual0,
-        ]);
+    if (t_split2Fill.t > 0) {
+        processBackwardChain(state, t_split2Fill, [blk.attnResidual, blk.attnOut, prev]);
     }
     if (t_settle.t > 0) {
-        processBackwardChain(state, t_settle, [layout.residual0]);
+        processBackwardChain(state, t_settle, [prev]);
     }
+
+    // 整塊飛：只看一條的話，從看得到整層的距離望過去只剩一條線
+    sceneMoveBlock(state, t_split1Demo, blk.mlpResidual, blk.mlpResult, { symbol: '=' });
+    sceneMoveBlock(state, t_split1Demo, blk.mlpResidual, blk.attnResidual, { symbol: '=', delay: 0.12 });
+    sceneMoveBlock(state, t_split2Demo, blk.attnResidual, blk.attnOut, { symbol: '=' });
+    sceneMoveBlock(state, t_split2Demo, blk.attnResidual, prev, { symbol: '=', delay: 0.12 });
 }

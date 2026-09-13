@@ -27,6 +27,22 @@ GPT 類大語言模型的 **3D 互動視覺化**：一個 token 從進入模型�
 | 03 | 層歸一化 (LayerNorm) | 08 | Transformer |
 | 04 | 自注意力 (Self-Attention) | 09 | 輸出 |
 
+### 反向傳播
+
+| # | 章節 | # | 章節 |
+|---|---|---|---|
+| 10 | 損失與 dLogits | 14 | 自注意力 (Self-Attention) |
+| 11 | MLP 與 GELU | 15 | 層歸一化 (LayerNorm) |
+| 12 | 殘差分流 | 16 | 嵌入 (Embedding) |
+| 13 | 投射 (Projection) | | |
+
+每個反向運算都用「把前向動畫倒著演」的方式呈現：格子從矩陣裡飛出來、相乘、加總、落進梯度。
+點一下 3D 畫面裡的任一格，側邊欄會從前向式出發，逐步推導（偏微分 → 連鎖律 → 加總 → 代入數字）到那一格的梯度，
+並與 PyTorch autograd 的結果對答案。
+
+梯度資料由 `gen_grad_data.py` 產生（需要 PyTorch，不需要 minGPT）。輸入必須與畫面上的前向模型相同；
+腳本會先逐張比對手寫前向與 minGPT 的中間值，再驗證反向公式，全部通過才寫出 `public/gpt-nano-sort-grads.json`。
+
 ## 本地執行
 
 ```

@@ -1,9 +1,13 @@
 import React from 'react';
-import { Vec3 } from "@/src/utils/vector";
+import { Dim, Vec3 } from "@/src/utils/vector";
 import { Phase } from "./Walkthrough";
 import { commentary, DimStyle, IWalkthroughArgs, moveCameraTo, setInitialCamera } from "./WalkthroughTools";
 import { focusBackwardScene, processBackwardChain } from "./BackpropTools";
-import { flyCopies } from "./BackpropAnim";
+import { argmaxAbs, sceneCollapse, sceneMoveSlice, scenePairDot, shiftToBlock } from "./BackpropScenes";
+import { cellPos } from "./BackpropAnim";
+import { embedInline } from "./Walkthrough01_Prelim";
+import { Tex } from "../components/Tex";
+import { gradAt } from "../components/GradMath";
 
 export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
     let { walkthrough: wt, layout, state, tools: { afterTime, c_blockRef, c_dimRef, breakAfter } } = args;
@@ -12,18 +16,26 @@ export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
         return;
     }
 
-    let block0 = layout.blocks[0];
-    let heads = block0.heads;
-    let { A } = layout.shape;
+    let li = layout.blocks.length - 1;
+    let blk = layout.blocks[li];
+    let heads = blk.heads;
+    let { A, C } = layout.shape;
+    let POS = state.gradData?.lossPos ?? 5;
+    let cam = (x: number, z: number) => shiftToBlock(layout, li, new Vec3(x, 0, z));
 
-    setInitialCamera(state, new Vec3(-73.167, 0.000, -270.725), new Vec3(293.606, 2.613, 1.366));
-    wt.dimHighlightBlocks = [block0.attnOut, ...heads.map(h => h.vOutBlock)];
+    setInitialCamera(state, cam(-73.167, -270.725), new Vec3(293.606, 2.613, 1.366));
+    wt.dimHighlightBlocks = [blk.attnOut, ...heads.map(h => h.vOutBlock)];
+
+    let H = 0;
+    let cStar = argmaxAbs(C, c => gradAt(blk.attnOut, new Vec3(POS, c, 0)));
+    let aStar = argmaxAbs(A, a => gradAt(heads[H].vOutBlock, new Vec3(POS, a, 0)));
+    let iStar = H * A + aStar;
 
     commentary(wt, null, 0)`
 多頭注意力有個容易被忽略的細節：那幾個 head 其實**從頭到尾沒有互相講過話**。
-它們各算各的，最後只是把輸出並排接在一起，再乘上一個投射矩陣。
+它們各算各的，最後只是把輸出並排接在一起（concat），再乘上一個投射矩陣。
 
-投射層做的就是這件事 —— 它是唯一讓各個 head 的資訊混在一起的地方。
+投射層是唯一讓各個 head 的資訊混在一起的地方。
 反向時，它也是唯一負責把責任**切開分回各個 head** 的地方。`;
     breakAfter();
 
@@ -32,71 +44,95 @@ export function walkthrough13_BackProjection(args: IWalkthroughArgs) {
 
     breakAfter();
     commentary(wt)`
-梯度從 ${c_blockRef('注意力輸出', block0.attnOut)} 進來（上一章的殘差分給它的那一份）。
+梯度從 ${c_blockRef('注意力輸出', blk.attnOut)} 進來（上一章殘差分給它的那一份）。
 
-投射是個標準的矩陣乘法 O = Wproj · V，所以反向也是標準的兩條：
+先看 ${c_blockRef('投射權重', blk.projWeight)}。它是 ${c_dimRef('C', DimStyle.C)} × ${c_dimRef('C', DimStyle.C)} 的方陣，
+其中一格 W[c, i] 在前向時，每個位置都把 concat 的第 i 維乘進輸出的第 c 維。
 
-dWproj = dO · Vᵀ　　dV = Wprojᵀ · dO
-
-先看權重那一條。${c_blockRef('投射權重', block0.projWeight)} 是
-${c_dimRef('C', DimStyle.C)} × ${c_dimRef('C', DimStyle.C)} 的方陣 ——
-它學的是「怎麼把三個 head 的意見調配成一個結論」。`;
+所以這一格的梯度沿位置加總：dAttnOut 的第 c 列，逐格乘上 concat 的第 i 列（也就是 head ${embedInline(<>{H}</>)} 輸出的某一列）。`;
     breakAfter();
 
-    let t_dProjW = afterTime(null, 4.8);
+    let t_dWDemo = afterTime(null, 5.0, 0.3);
+    let t_dWFill = afterTime(null, 2.0);
 
     breakAfter();
     commentary(wt)`
-接著是有意思的那一條。
+${embedInline(<Tex block tex={String.raw`dW^{\text{proj}}_{c,i} = \sum_{t} d\text{AttnOut}_{c,t}\;\text{concat}_{i,t}`} />)}
 
-前向時三個 head 的輸出是「並排接起來」的：head 0 佔了前 ${c_dimRef('A', DimStyle.A)} 個維度，
-head 1 佔接下來 A 個，依此類推。**串接在反向就是切開。**
-
-所以 dV 算出來之後，它的前 A 個維度就是 head 0 該拿的、中間 A 個是 head 1 的、
-最後 A 個是 head 2 的。不需要任何額外運算 —— 只是把同一塊東西按位置分給三個人。`;
+反過來看 concat 那一邊。concat 的一格影響過輸出的**每一個通道 c**，
+所以它的梯度沿 c 加總：dAttnOut 位置 5 那一行（48 格），逐格乘上權重的第 i 行。`;
     breakAfter();
 
-    let t_dHeads = afterTime(null, 5.6);
+    let t_dConcatDemo = afterTime(null, 5.0, 0.3);
 
     breakAfter();
     commentary(wt)`
-三個 head 各自拿到自己那一份，接下來就會沿著各自的 Q、K、V 往回走 ——
-那是下一章「自注意力」的內容。
+${embedInline(<Tex block tex={String.raw`d\text{concat}_{i,t} = \sum_{c} d\text{AttnOut}_{c,t}\;W^{\text{proj}}_{c,i}`} />)}
 
-順帶一提，${c_blockRef('投射偏置', block0.projBias)} 的梯度是把整批位置加起來的結果。
-偏置對每個位置貢獻同一個數，所以每個位置的責任都要算到它頭上。`;
+算出來的 dConcat 是一整條 48 維。前向時三個 head 的輸出是「並排接起來」的：
+head 0 佔前 ${c_dimRef('A', DimStyle.A)} 維、head 1 佔接下來 A 維、head 2 佔最後 A 維。
+
+**串接在反向就是切開**：不需要任何運算，只是把同一條按位置切成三段，各還給自己的 head。`;
     breakAfter();
 
-    let t_dBias = afterTime(null, 2.4);
+    let t_splitDemo = afterTime(null, 4.5, 0.3);
+    let t_splitFill = afterTime(null, 2.5);
 
-    moveCameraTo(state, t_moveCamera, new Vec3(-68.2, 0, -282.4), new Vec3(293.6, 2.6, 1.1));
+    breakAfter();
+    commentary(wt)`
+三個 head 各自拿到自己那一段，接下來會沿著各自的 Q、K、V 往回走 —— 那是下一章。
 
-    let relevant = new Set([
+順帶一提，${c_blockRef('投射偏置', blk.projBias)} 對每個位置加同一個數，所以它的梯度是把每個位置加起來。`;
+    breakAfter();
+
+    let t_biasDemo = afterTime(null, 3.0, 0.3);
+    let t_biasFill = afterTime(null, 1.5);
+
+    moveCameraTo(state, t_moveCamera, cam(-68.2, -282.4), new Vec3(293.6, 2.6, 1.1));
+
+    focusBackwardScene(state, new Set([
         ...heads.map(h => h.vOutBlock),
-        block0.projWeight,
-        block0.projBias,
-        block0.attnOut,
-    ]);
-    focusBackwardScene(state, relevant, t_fade.t);
+        blk.projWeight,
+        blk.projBias,
+        blk.attnOut,
+    ]), t_fade.t);
 
-    if (t_dProjW.t > 0) {
-        processBackwardChain(state, t_dProjW, [block0.attnOut, block0.projWeight]);
+    if (t_fade.t > 0) {
+        processBackwardChain(state, t_fade, [blk.attnOut]);
     }
-    if (t_dHeads.t > 0) {
-        // 串接的反向＝切開。注意這裡不能畫成「同一格複製給三個 head」——
-        // 切開的意思是三**段不同**的值各給一個 head，複製會講成完全相反的事。
-        // 所以各自從對應的通道帶飛出去：前 A 個給 head 0、中間 A 個給 head 1、依此類推。
-        for (let i = 0; i < heads.length; i++) {
-            flyCopies(state, t_dHeads,
-                { blk: block0.attnOut, idx: new Vec3(5, i * A + Math.floor(A / 2), 0) },
-                [{ blk: heads[i].vOutBlock, idx: new Vec3(5, Math.floor(A / 2), 0) }]);
-        }
+    if (t_dWFill.t > 0) {
+        processBackwardChain(state, t_dWFill, [blk.attnOut, blk.projWeight]);
+    }
+    if (t_splitFill.t > 0) {
+        processBackwardChain(state, t_splitFill, [blk.attnOut, ...heads.map(h => h.vOutBlock)]);
+    }
+    if (t_biasFill.t > 0) {
+        processBackwardChain(state, t_biasFill, [blk.attnOut, blk.projBias]);
+    }
 
-        processBackwardChain(state, t_dHeads, [
-            block0.attnOut, ...heads.map(h => h.vOutBlock),
-        ]);
-    }
-    if (t_dBias.t > 0) {
-        processBackwardChain(state, t_dBias, [block0.attnOut, block0.projBias]);
-    }
+    scenePairDot(state, t_dWDemo,
+        { blk: blk.attnOut, fixDim: Dim.Y, fixIdx: cStar, kind: 'grad' },
+        { blk: heads[H].vOutBlock, fixDim: Dim.Y, fixIdx: aStar, kind: 'fwd' },
+        { blk: blk.projWeight, idx: new Vec3(iStar, cStar, 0) },
+        { maxPairs: POS + 1 });
+
+    scenePairDot(state, t_dConcatDemo,
+        { blk: blk.attnOut, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
+        { blk: blk.projWeight, fixDim: Dim.X, fixIdx: iStar, kind: 'fwd' },
+        { blk: heads[H].vOutBlock, idx: new Vec3(POS, aStar, 0) },
+        { maxPairs: 8 });
+
+    // 切開：三段先疊成一整條，浮在注意力輸出那一行前面，再分頭飛回各自的 head
+    let stackTl = cellPos(state, blk.attnOut, new Vec3(POS, 0, 0));
+    heads.forEach((h, i) => {
+        sceneMoveSlice(state, t_splitDemo,
+            { blk: h.vOutBlock, fixDim: Dim.X, fixIdx: POS, kind: 'grad' },
+            { blk: h.vOutBlock, fixDim: Dim.X, fixIdx: POS },
+            { from: stackTl.add(new Vec3(0, i * A * layout.cell, 0)), delay: i * 0.12 });
+    });
+
+    sceneCollapse(state, t_biasDemo,
+        { blk: blk.attnOut, fixDim: Dim.Y, fixIdx: cStar, kind: 'grad' },
+        { blk: blk.projBias, idx: new Vec3(0, cStar, 0) },
+        { maxCells: POS + 1 });
 }
