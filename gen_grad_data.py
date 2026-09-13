@@ -2,19 +2,21 @@
 產生反向傳播視覺化所需的梯度資料 -> public/gpt-nano-sort-grads.json
 
 設計原則：
-  * 完全不修改 gen_test_data.py 與既有的前向資料，前向教學不受影響。
-  * 權重直接從 public/gpt-nano-sort-model.json 還原（該檔已含完整 state_dict），
-    因此不需要 minGPT 的 model.pt。
-  * 輸入 idx 與 gen_test_data.py 完全相同，梯度才對得上前向視覺化顯示的數值。
+  * 輸入必須與畫面上的前向模型完全相同。GptModel.ts 與 GptModelWasm.ts 寫死的是
+    [2, 1, 0, 1, 1, 2, 0, 0, 0, 0, 0]（C B A B B C）。
+    gen_test_data.py 用的是另一條驗證序列（A A C B A B），**不能照抄** ——
+    之前照抄過，結果梯度與畫面上的前向值根本不是同一次前向，側邊欄的逐步推導全部驗算失敗。
+  * 不需要 minGPT：前向照 minGPT 的 GPT 定義用純 PyTorch 寫出來，權重從
+    public/gpt-nano-sort-model.json 還原（該檔已含完整 state_dict）。
+    寫完先拿 gen_test_data.py 用 minGPT 跑出來的中間值（gpt-nano-sort-t0-partials.json）
+    逐張比對，一模一樣才繼續。
   * 損失刻意採用「反事實標的」：這個 nano-gpt 在此範例上已經完全收斂
-    （每個位置的預測機率都是 1.0），用正確標的算出來的梯度全都趨近 0，
-    畫面上會是一片空白 —— 這正說明了「模型答對時沒有東西需要修正」。
-    因此我們在位置 t=5 問一個反事實問題：「如果正解其實是 C 而不是模型
-    深信不疑的 A，誤差會怎麼往回傳？」這會得到乾淨且看得見的梯度，
-    且 dL/dlogits = p - y = [1, 0, -1]，好講也好驗證。
+    （位置 5 的預測是 "A"，機率 ≈ 1.0），用正確標的算出來的梯度全都趨近 0，
+    畫面上會是一片空白。因此在位置 t=5 問：「如果正解其實是 C 呢？」
+    這會得到乾淨且看得見的梯度，且 dL/dlogits = p - y ≈ [1, 0, -1]，好講也好驗證。
 
 用法：
-    python gen_grad_data.py --mingpt <minGPT repo 路徑>
+    python gen_grad_data.py
 """
 import argparse
 import base64
@@ -23,23 +25,31 @@ import math
 import os
 import sys
 
+import numpy as np
 import torch
 from torch.nn import functional as F
 
+# 畫面上的輸入。改這裡之前，先確認 GptModel.ts / GptModelWasm.ts 也一起改了。
+VIZ_IDX = [2, 1, 0, 1, 1, 2, 0, 0, 0, 0, 0]
 
-def load_model_json(path):
+LOSS_POS = 5      # 提示詞的最後一個位置，也就是要生出第一個排序結果的地方
+LOSS_TARGET = 2   # 'C'。模型其實深信是 'A'(0)，故意給相反的標的
+LN_EPS = 1e-5     # minGPT 用 nn.LayerNorm 的預設值
+
+
+def decode_tensor(v):
+    raw = base64.b64decode(v['data'])
+    np_dtype = {'torch.float32': '<f4', 'torch.int64': '<i8'}[v['dtype']]
+    arr = np.frombuffer(raw, dtype=np_dtype).reshape(v['shape'])
+    return torch.from_numpy(arr.copy())
+
+
+def load_tensor_json(path):
     with open(path, encoding='utf-8') as f:
         d = json.load(f)
-    config = d.pop('config')
-    state = {}
-    for k, v in d.items():
-        raw = base64.b64decode(v['data'])
-        dtype = {'torch.float32': torch.float32, 'torch.int64': torch.int64}[v['dtype']]
-        np_dtype = {'torch.float32': '<f4', 'torch.int64': '<i8'}[v['dtype']]
-        import numpy as np
-        arr = np.frombuffer(raw, dtype=np_dtype).reshape(v['shape'])
-        state[k] = torch.from_numpy(arr.copy()).to(dtype)
-    return config, state
+    config = d.pop('config', None)
+    tensors = {k: decode_tensor(v) for k, v in d.items() if isinstance(v, dict) and 'data' in v}
+    return config, tensors
 
 
 def tensor_to_json(t):
@@ -51,137 +61,167 @@ def tensor_to_json(t):
     }
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--mingpt', required=True, help='minGPT repo 路徑（含 mingpt/ 套件）')
-    ap.add_argument('--model-json', default='public/gpt-nano-sort-model.json')
-    ap.add_argument('--out', default='public/gpt-nano-sort-grads.json')
-    args = ap.parse_args()
+def new_gelu(x):
+    """minGPT 的 NewGELU（與 GPT-2 相同的 tanh 近似）。"""
+    return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
 
-    sys.path.insert(0, args.mingpt)
-    from mingpt.model import GPT
-    from mingpt.utils import set_seed
-    set_seed(3407)
 
-    config, state = load_model_json(args.model_json)
+def forward(params, masks, cfg, idx, retain):
+    """
+    照 minGPT 的 GPT.forward 逐步展開，並把每個中間量存下來。
+    retain=True 時對中間量 retain_grad，反向之後才拿得到它們的梯度。
 
-    mc = GPT.get_default_config()
-    mc.model_type = config['model_type']
-    mc.vocab_size = config['vocab_size']
-    mc.block_size = config['block_size']
-    model = GPT(mc)
-    model.load_state_dict(state)
-    model.eval()   # 關閉 dropout：梯度才是確定性的，可重現
-
-    n_head, n_embd = mc.n_head, mc.n_embd
-    T = mc.block_size
-    # 視覺化端固定以 B=1 執行（Program.ts 的 shape.B 與 LayerView 的 initModel 都是 1），
-    # 梯度張量必須同樣是 B=1，否則寫進 texture 時尺寸對不上。
-    B = 1
-
-    # 與 gen_test_data.py 的第一列輸入完全相同 —— 也就是畫面上顯示的那條序列
-    idx = torch.tensor([[0, 0, 2, 1, 0, 1, 0, 0, 0, 0, 0]], dtype=torch.long)
-
-    # ---- 前向（逐層捕捉，並 retain_grad 以便取得中間量的梯度）----
+    命名沿用既有的 Backprop.ts 對接：第 0 層無前綴，其餘各層 b1. / b2.。
+    """
+    n_head = cfg['n_head']
+    C = cfg['n_embd']
+    n_layer = cfg['n_layer']
+    B, T = idx.shape
+    hs = C // n_head
     captured = {}
 
     def cap(name, t):
-        t.retain_grad()
+        if retain and t.requires_grad:
+            t.retain_grad()
         captured[name] = t
         return t
 
     pos = torch.arange(0, T, dtype=torch.long).unsqueeze(0)
-    tok_emb = cap('tok_emb', model.transformer.wte(idx))
-    pos_emb = cap('pos_emb', model.transformer.wpe(pos))
-    x = cap('x', tok_emb + pos_emb)
+    tok_emb = cap('tok_emb', F.embedding(idx, params['transformer.wte.weight']))
+    pos_emb = cap('pos_emb', F.embedding(pos, params['transformer.wpe.weight']))
+    h = cap('x', tok_emb + pos_emb)
 
-    # 逐層展開，每一層的中間量都 retain_grad。
-    # 原本只對第 0 層這麼做，其餘各層直接 block(h) 帶過 —— 結果視覺化裡
-    # 滑到後面幾層的區塊只有權重有梯度，中間量一律空白。
-    # 第 0 層沿用無前綴的名字（verify() 與既有的 Backprop.ts 對接都靠它），
-    # 其餘各層加上 b1. / b2. 前綴。
-    def run_block(block, x, prefix):
-        def c(name, t):
+    for i in range(n_layer):
+        prefix = '' if i == 0 else f'b{i}.'
+
+        def p(name, i=i):
+            return params[f'transformer.h.{i}.{name}']
+
+        def c(name, t, prefix=prefix):
             return cap(prefix + name, t)
 
-        ln1 = c('ln1', block.ln_1(x))
+        ln1 = c('ln1', F.layer_norm(h, (C,), p('ln_1.weight'), p('ln_1.bias'), eps=LN_EPS))
+        qkv = c('qkv', F.linear(ln1, p('attn.c_attn.weight'), p('attn.c_attn.bias')))
+        q_, k_, v_ = qkv.split(C, dim=2)
+        q = c('q', q_.view(B, T, n_head, hs).transpose(1, 2))
+        k = c('k', k_.view(B, T, n_head, hs).transpose(1, 2))
+        v = c('v', v_.view(B, T, n_head, hs).transpose(1, 2))
 
-        qkv = c('qkv', block.attn.c_attn(ln1))
-        q_, k_, v_ = qkv.split(n_embd, dim=2)
-        q = c('q', q_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
-        k = c('k', k_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
-        v = c('v', v_.view(B, T, n_head, n_embd // n_head).transpose(1, 2))
-
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(block.attn.bias[:, :, :T, :T] == 0, float('-inf'))
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(hs))
+        att = att.masked_fill(masks[i][:, :, :T, :T] == 0, float('-inf'))
         att = c('att', att)
         attSm = c('attSm', F.softmax(att, dim=-1))
-        y_ = attSm @ v
-        y = c('y', y_.transpose(1, 2).contiguous().view(B, T, n_embd))
-        yProj = c('yProj', block.attn.c_proj(y))
+        y = c('y', (attSm @ v).transpose(1, 2).contiguous().view(B, T, C))
+        yProj = c('yProj', F.linear(y, p('attn.c_proj.weight'), p('attn.c_proj.bias')))
 
-        attnResid = c('attnResid', x + yProj)
-        ln2 = c('ln2', block.ln_2(attnResid))
-        fc = c('fc', block.mlp.c_fc(ln2))
-        gelu = c('gelu', block.mlp.act(fc))
-        mlp = c('mlp', block.mlp.c_proj(gelu))
-        mlpResid = c('mlpResid', attnResid + mlp)
-        return mlpResid
-
-    h = x
-    for i, block in enumerate(model.transformer.h):
-        prefix = '' if i == 0 else f'b{i}.'
-        h = run_block(block, h, prefix)
+        attnResid = c('attnResid', h + yProj)
+        ln2 = c('ln2', F.layer_norm(attnResid, (C,), p('ln_2.weight'), p('ln_2.bias'), eps=LN_EPS))
+        fc = c('fc', F.linear(ln2, p('mlp.c_fc.weight'), p('mlp.c_fc.bias')))
+        gelu = c('gelu', new_gelu(fc))
+        mlp = c('mlp', F.linear(gelu, p('mlp.c_proj.weight'), p('mlp.c_proj.bias')))
+        h = c('mlpResid', attnResid + mlp)
         # 區塊輸出另外取一個名字，方便視覺化端直接對接
         captured[f'block{i}'] = h
 
-    ln_f = cap('ln_f', model.transformer.ln_f(h))
-    logits = cap('lm_head', model.lm_head(ln_f))
-    probs = cap('probs', F.softmax(logits, dim=-1))
+    ln_f = cap('ln_f', F.layer_norm(h, (C,), params['transformer.ln_f.weight'], params['transformer.ln_f.bias'], eps=LN_EPS))
+    logits = cap('lm_head', F.linear(ln_f, params['lm_head.weight']))
+    cap('probs', F.softmax(logits, dim=-1))
+    return captured, logits
 
-    # ---- 損失：位置 LOSS_POS 的反事實 cross-entropy ----
-    LOSS_POS = 5              # 提示詞的最後一個位置，也就是要生出第一個排序結果的地方
-    LOSS_TARGET = 2           # 'C'。模型其實深信是 'A'(0)，故意給相反的標的
+
+def check_against_mingpt(params, masks, cfg, partials_path):
+    """手寫的前向必須與 minGPT 逐張相同，否則後面算的梯度沒有意義。"""
+    _, ref = load_tensor_json(partials_path)
+    idx = ref['idx'].to(torch.long)
+    with torch.no_grad():
+        mine, _ = forward(params, masks, cfg, idx, retain=False)
+
+    print(f'手寫前向 vs minGPT（{partials_path}，batch={idx.shape[0]}）:')
+    ok = True
+    for name, r in ref.items():
+        if name == 'idx' or name not in mine:
+            continue
+        m = mine[name].to(torch.float32)
+        r = r.to(torch.float32)
+        if m.shape != r.shape:
+            print(f'  FAIL {name:10} shape {tuple(m.shape)} vs {tuple(r.shape)}')
+            ok = False
+            continue
+        finite = torch.isfinite(r)
+        same_mask = torch.equal(finite, torch.isfinite(m))
+        err = (m[finite] - r[finite]).abs().max().item() if finite.any() else 0.0
+        good = same_mask and err < 1e-4
+        ok = ok and good
+        print(f"  {'OK ' if good else 'FAIL'} {name:10} max|diff|={err:.2e}")
+    return ok
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--model-json', default='public/gpt-nano-sort-model.json')
+    ap.add_argument('--partials-json', default='public/gpt-nano-sort-t0-partials.json')
+    ap.add_argument('--out', default='public/gpt-nano-sort-grads.json')
+    args = ap.parse_args()
+
+    cfg, state = load_tensor_json(args.model_json)
+    n_layer = cfg['n_layer']
+
+    # attn.bias 是因果遮罩（buffer），不是參數
+    masks = [state[f'transformer.h.{i}.attn.bias'] for i in range(n_layer)]
+    params = {k: v.to(torch.float32).clone().requires_grad_(True)
+              for k, v in state.items() if not k.endswith('.attn.bias')}
+
+    if not check_against_mingpt(params, masks, cfg, args.partials_json):
+        raise SystemExit('手寫前向與 minGPT 不一致，不寫出資料')
+    print()
+
+    T = cfg['block_size']
+    B = 1   # 視覺化端固定以 B=1 執行
+    idx = torch.tensor([VIZ_IDX], dtype=torch.long)
+    assert idx.shape == (B, T)
+
+    captured, logits = forward(params, masks, cfg, idx, retain=True)
+
+    probs = F.softmax(logits[0, LOSS_POS], dim=-1)
+    pred = int(probs.argmax())
+    print(f'輸入 {VIZ_IDX}，位置 {LOSS_POS} 的預測 = {pred}（p = {probs.tolist()}）')
+    if pred == LOSS_TARGET:
+        raise SystemExit('模型在這個位置本來就預測對了，反事實標的就不成立，請換一個 LOSS_TARGET')
+
     target = torch.full((B,), LOSS_TARGET, dtype=torch.long)
     loss = F.cross_entropy(logits[:, LOSS_POS, :], target)
     print(f'loss = {loss.item():.6f}  (t={LOSS_POS}, target={LOSS_TARGET})')
-
-    model.zero_grad(set_to_none=True)
     loss.backward()
 
-    # ---- 數值正確性驗證：對照教科書公式 ----
-    captured['_idx'] = idx
     print()
     print('驗證梯度（PyTorch autograd vs 手推公式）:')
-    if not verify(captured, model, mc, B, T):
+    if not verify(captured, params, cfg, idx):
         raise SystemExit('梯度驗證失敗，不寫出資料')
 
-    # ---- 收集梯度 ----
     out = {}
     missing = []
     for name, t in captured.items():
-        if name.startswith('_'):
-            continue
         if t.grad is None:
             missing.append(name)
             continue
         out['d_' + name] = tensor_to_json(t.grad)
-    for name, p in model.named_parameters():
-        if p.grad is None:
+    for name, prm in params.items():
+        if prm.grad is None:
             missing.append(name)
             continue
-        out['d_' + name] = tensor_to_json(p.grad)
+        out['d_' + name] = tensor_to_json(prm.grad)
 
     extra = {
-        'config': {**mc.to_dict(), 'B': B},
+        'config': {**cfg, 'B': B},
+        'inputIdx': VIZ_IDX,
         'loss': loss.item(),
         'lossKind': 'counterfactual-single-position-crossentropy',
         'lossPos': LOSS_POS,
         'lossTarget': LOSS_TARGET,
-        'note': 'gradients w.r.t. every captured activation and parameter. '
-                'The model has converged on this example, so a correct target would give '
-                'near-zero gradients; we deliberately use a counterfactual target so the '
-                'error signal is visible.',
+        'note': 'gradients w.r.t. every captured activation and parameter, for the same input the '
+                'visualization runs (inputIdx). The model has converged on this example, so a correct '
+                'target would give near-zero gradients; we deliberately use a counterfactual target so '
+                'the error signal is visible.',
     }
     payload = {**extra, **out}
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
@@ -190,16 +230,12 @@ def main():
 
     print(f'\n寫出 {args.out}（{os.path.getsize(args.out):,} bytes，{len(out)} 個梯度張量）')
     if missing:
-        print('沒有梯度的項目:', missing)
-    return captured, model, loss
+        print('沒有梯度的項目（不在損失的計算路徑上）:', missing)
 
 
-
-
-def verify(captured, model, mc, B, T):
+def verify(captured, params, cfg, idx):
     """把 PyTorch autograd 的結果，跟教科書上的 attention / embedding 反向公式逐元素比對。
     畫出來的動畫再漂亮，數值錯了就沒有意義，所以這一步是必要的。"""
-    import math
     ok = True
 
     def cmp(name, a, b, tol=2e-5):
@@ -211,55 +247,58 @@ def verify(captured, model, mc, B, T):
         ok = ok and good
         print(f"  {'OK ' if good else 'FAIL'} {name:38} max|diff|={err:.3e}  rel={rel:.2e}")
 
-    n_head = mc.n_head
-    hs = mc.n_embd // n_head
+    B, T = idx.shape
+    C = cfg['n_embd']
+    n_head = cfg['n_head']
+    hs = C // n_head
 
     q, k, v = captured['q'], captured['k'], captured['v']
-    att, attSm, y = captured['att'], captured['attSm'], captured['y']
+    attSm, y = captured['attSm'], captured['y']
+    att = captured['att']
 
-    # dO：把 y 的梯度 (B,T,C) 還原成每個 head 的 (B,nh,T,hs)
     dY = y.grad.view(B, T, n_head, hs).transpose(1, 2)
 
-    # dV = P^T dO
-    dV_manual = attSm.transpose(-2, -1) @ dY
-    cmp("dV = P^T dO", dV_manual, v.grad)
+    cmp("dV = P^T dO", attSm.transpose(-2, -1) @ dY, v.grad)
+    cmp("dP = dO V^T", dY @ v.transpose(-2, -1), attSm.grad)
 
-    # dP = dO V^T
-    dP_manual = dY @ v.transpose(-2, -1)
-    cmp("dP = dO V^T", dP_manual, attSm.grad)
-
-    # dS = P * (dP - rowsum(P*dP))
     P, dP = attSm, attSm.grad
-    dS_manual = P * (dP - (P * dP).sum(dim=-1, keepdim=True))
-    cmp("dS = P o (dP - rowsum(P o dP))", dS_manual, att.grad)
+    cmp("dS = P o (dP - rowsum(P o dP))", P * (dP - (P * dP).sum(dim=-1, keepdim=True)), att.grad)
 
-    # FlashAttention 恆等式：rowsum(P o dP) == rowsum(O o dO)
-    O = (attSm @ v)
-    lhs = (P * dP).sum(dim=-1)
-    rhs = (O * dY).sum(dim=-1)
-    cmp("rowsum(P o dP) == rowsum(O o dO)", lhs, rhs)
+    O = attSm @ v
+    cmp("rowsum(P o dP) == rowsum(O o dO)", (P * dP).sum(dim=-1), (O * dY).sum(dim=-1))
 
-    # dQ = dS K / sqrt(hs) ; dK = dS^T Q / sqrt(hs)
     scale = 1.0 / math.sqrt(hs)
     dS = att.grad
     cmp("dQ = dS K / sqrt(d)", dS @ k * scale, q.grad)
     cmp("dK = dS^T Q / sqrt(d)", dS.transpose(-2, -1) @ q * scale, k.grad)
 
+    # Layer Norm：dX = (g - mean(g) - xhat * mean(g * xhat)) / sigma，g = gamma * dLN
+    x_in = captured['x']
+    ln1 = captured['ln1']
+    gamma = params['transformer.h.0.ln_1.weight']
+    mu = x_in.mean(dim=-1, keepdim=True)
+    sigma = torch.sqrt(((x_in - mu) ** 2).mean(dim=-1, keepdim=True) + LN_EPS)
+    xhat = (x_in - mu) / sigma
+    g = ln1.grad * gamma
+    dX_ln = (g - g.mean(dim=-1, keepdim=True) - xhat * (g * xhat).mean(dim=-1, keepdim=True)) / sigma
+    # x 同時被 ln1 與殘差用到，所以 dX = LN 那一路 + 殘差那一路
+    cmp("dX = LN path + residual path", dX_ln + captured['attnResid'].grad, x_in.grad)
+
     # embedding：scatter-add
-    idx_used = captured['_idx']
-    dTok = captured['tok_emb'].grad                       # (B, T, C)
-    dWte_manual = torch.zeros_like(model.transformer.wte.weight)
-    dWte_manual.index_add_(0, idx_used.reshape(-1), dTok.reshape(-1, mc.n_embd))
-    cmp("d_wte = scatter-add(d_tok_emb)", dWte_manual, model.transformer.wte.weight.grad)
+    dTok = captured['tok_emb'].grad
+    dWte_manual = torch.zeros_like(params['transformer.wte.weight'])
+    dWte_manual.index_add_(0, idx.reshape(-1), dTok.reshape(-1, C))
+    cmp("d_wte = scatter-add(d_tok_emb)", dWte_manual, params['transformer.wte.weight'].grad)
 
     # 因果結構：loss 只看 t=5，所以 t>5 的位置梯度必須是 0
-    tail = dTok[:, 6:, :].abs().max().item()
+    tail = dTok[:, LOSS_POS + 1:, :].abs().max().item()
     good = tail < 1e-12
     ok = ok and good
     print(f"  {'OK ' if good else 'FAIL'} {'causal: d_tok_emb[t>5] == 0':38} max={tail:.3e}")
 
     print("\n  => 全部通過" if ok else "\n  => 有項目不符，請檢查")
     return ok
+
 
 if __name__ == '__main__':
     main()

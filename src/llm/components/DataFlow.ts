@@ -206,7 +206,15 @@ export function getBlockValueAtIdx(blk: IBlkDef, blkIdx: Vec3) {
     }
     let bufferTex = blk.access.src;
 
-    let bufferPos = blk.access.mat.mulVec4(new Vec4(blkIdx.x, blkIdx.y, blkIdx.z, 1));
+    // access.mat 的前 8 格是 access.x 與 access.y 兩組係數 [cx, cy, cz, 偏移]，
+    // 著色器把它當 row-major 的 mat4x2 用（見 blockRender）。這裡必須照同樣的方式展開。
+    // 原本用 mat.mulVec4 會把兩組係數當成轉置，而且完全吃不到偏移量 ——
+    // 結果 K、V 權重與第 1 個 head 以後的格子，讀到的都是 Q／head 0 的數字。
+    let m = blk.access.mat;
+    let bufferPos = {
+        x: m[0] * blkIdx.x + m[1] * blkIdx.y + m[2] * blkIdx.z + m[3],
+        y: m[4] * blkIdx.x + m[5] * blkIdx.y + m[6] * blkIdx.z + m[7],
+    };
 
     let channelIdx = blk.access.channel === 'r' ? 0 : blk.access.channel === 'g' ? 1 : blk.access.channel === 'b' ? 2 : 3;
 
