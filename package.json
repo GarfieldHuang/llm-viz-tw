@@ -16,7 +16,7 @@
         "@fortawesome/react-fontawesome": "0.2.0",
         "clsx": "2.0.0",
         "d3-color": "3.1.0",
-        "katex": "0.18.7",
+        "katex": "0.16.47",
         "next": "13.4.19",
         "react": "18.2.0",
         "react-dom": "18.2.0"
