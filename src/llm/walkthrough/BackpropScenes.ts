@@ -729,6 +729,12 @@ export function sceneElemMul(
 // 七、損失端：預測減去答案
 // ---------------------------------------------------------------------------
 
+/** 兩位小數，並把 -0.00 寫成 0.00（機率 0.001 減 0 不該看起來是負的）。 */
+function fmt2(x: number) {
+    let s = x.toFixed(2);
+    return s === '-0.00' ? '0.00' : s;
+}
+
 /**
  * 機率那一行的每一格飛下來，減掉 one-hot（正解那一格減 1，其他減 0），落成 dLogits。
  */
@@ -758,7 +764,14 @@ export function sceneLossSeed(state: IProgramState, timer: ITimeInfo, probs: IBl
             }
         }
         if (tv > 0.45 && tv < 0.9) {
-            writeText(state, to.add(lift).add(new Vec3(cell * 3.2, cell * 0.5, cell)), v === target ? '— 1' : '— 0', LABEL);
+            // 整條算式都寫出來。只寫「— 1」「— 0」會被讀成 -1、-0，看不出結果其實是 [1, 0, -1]。
+            let onehot = v === target ? 1 : 0;
+            let p = fwdAt(state, probs, idx);
+            let text = p === null
+                ? '— ' + onehot
+                : fmt2(p) + ' — ' + onehot + ' = ' + fmt2(p - onehot);
+            let w = text.length * LABEL * 0.6;
+            writeText(state, to.add(lift).add(new Vec3(cell * 2 + w / 2, cell * 0.5, cell)), text, LABEL);
         }
         if (tv > 0.8) {
             let r = dupCell(state, logits, idx, 'grad');

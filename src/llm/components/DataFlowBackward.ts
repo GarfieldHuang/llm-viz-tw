@@ -302,15 +302,24 @@ function drawSingleConsumer(args: IDataFlowArgs, c: IBlkConsumer): BoundingBox3d
 
 /** 損失端：dLogits = P — onehot(target) */
 function drawLossSeed(args: IDataFlowArgs): BoundingBox3d {
-    let opts = fontOptsOf(args);
-    return drawMaths(args, args.center, mkTextBlock({
-        opts,
-        subs: [
-            { text: selfName(args) + ' = ', color: gradColor },
-            { text: 'P', color: workingSrcColor },
-            { text: ' — onehot(target)' },
-        ],
-    }));
+    let { state, destIdx } = args;
+    let pos = state.gradData?.lossPos ?? 5;
+    let target = state.gradData?.lossTarget ?? 2;
+
+    let formula: ITextBlockArgs[] = [
+        { text: selfName(args) + ' = ', color: gradColor },
+        { text: 'P', color: workingSrcColor },
+        { text: ' — onehot(target)' },
+    ];
+
+    // 第二行把數字代進去，讀者才看得出 [1, 0, -1] 是 1-0、0-0、0-1
+    if (destIdx.x !== pos) {
+        return twoLines(args, formula, 'loss only at t = ' + pos + ', so 0');
+    }
+    let p = fwdAt(state, state.layout.logitsSoftmax, destIdx);
+    let onehot = destIdx.y === target ? 1 : 0;
+    return twoLines(args, formula, (p === null ? '?' : p.toFixed(2)) + ' — ' + onehot
+        + (onehot ? '   (target)' : ''));
 }
 
 /**
